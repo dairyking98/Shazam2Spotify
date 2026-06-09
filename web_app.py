@@ -91,6 +91,10 @@ def make_auth_manager(cfg):
 
 
 def make_sp(cfg):
+    # If a pre-fetched access token was passed (set by /start_transfer in the main thread),
+    # use it directly so the worker thread never touches SpotifyOAuth or the .cache file.
+    if cfg.get("_access_token"):
+        return spotipy.Spotify(auth=cfg["_access_token"], requests_timeout=10, retries=3)
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg), requests_timeout=10, retries=3)
 
 
@@ -555,6 +559,20 @@ def start_transfer():
                 "selected_playlist_id", "selected_playlist_name"):
         if key in data:
             cfg[key] = data[key]
+    # Pre-authenticate in the main (request) thread so the worker thread
+    # receives a ready access token and never needs to call SpotifyOAuth.
+    # SpotifyOAuth is not thread-safe: token refresh inside a daemon thread
+    # can deadlock on the .cache file lock, causing the worker to hang forever.
+    try:
+        auth_manager = make_auth_manager(cfg)
+        token_info   = auth_manager.get_cached_token()
+        if not token_info:
+            return jsonify({"error": "Not authenticated with Spotify — please connect first"}), 401
+        if auth_manager.is_token_expired(token_info):
+            token_info = auth_manager.refresh_access_token(token_info["refresh_token"])
+        cfg["_access_token"] = token_info["access_token"]
+    except Exception as e:
+        return jsonify({"error": f"Spotify auth failed: {e}"}), 401
     transfer_queue   = queue.Queue()
     transfer_running = True
     t = threading.Thread(target=run_transfer, args=(cfg, songs), daemon=True)
