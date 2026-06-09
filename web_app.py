@@ -21,6 +21,13 @@ from flask import (
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
+# Clear any spotipy environment variables that could override config.json.
+# spotipy falls back to these env vars when the passed value is empty/None,
+# which caused the wrong client_id and redirect_uri to be used.
+for _env in ("SPOTIPY_CLIENT_ID", "SPOTIPY_CLIENT_SECRET", "SPOTIPY_REDIRECT_URI",
+             "SPOTIPY_CLIENT_USERNAME"):
+    os.environ.pop(_env, None)
+
 app = Flask(__name__)
 app.secret_key = "shazam2spotify-static-key-2024"   # static so sessions survive restarts
 
