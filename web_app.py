@@ -387,6 +387,42 @@ def check_auth():
         return jsonify({"authenticated": False})
 
 
+@app.route("/test_add_track")
+def test_add_track():
+    """Debug: try adding a known track to the first playlist found, return full Spotify response."""
+    import requests as req
+    cfg = load_config()
+    try:
+        sp   = make_sp(cfg)
+        auth = make_auth_manager(cfg)
+        token = auth.get_cached_token()
+        access_token = token["access_token"]
+
+        # Get first playlist
+        playlists = sp._get("me/playlists", limit=1)
+        if not playlists["items"]:
+            return jsonify({"error": "No playlists found"})
+        pl_id = playlists["items"][0]["id"]
+        pl_name = playlists["items"][0]["name"]
+
+        # Try adding a well-known track (Never Gonna Give You Up)
+        test_uri = "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+        url = f"https://api.spotify.com/v1/playlists/{pl_id}/tracks"
+        resp = req.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"uris": [test_uri]}
+        )
+        return jsonify({
+            "playlist": pl_name,
+            "playlist_id": pl_id,
+            "status_code": resp.status_code,
+            "response": resp.json() if resp.content else "(empty)"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route("/token_info")
 def token_info():
     """Debug route: shows what scopes the current cached token has."""
