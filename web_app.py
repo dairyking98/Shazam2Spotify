@@ -208,15 +208,24 @@ def run_transfer(cfg, songs):
     global transfer_running
 
     def emit(event, data):
+        print(f"[S2S EMIT] event={event} data={data}", flush=True)
         transfer_queue.put({"event": event, "data": data})
 
+    print(f"[S2S] run_transfer START — {len(songs)} songs, transfer_running={transfer_running}", flush=True)
+    print(f"[S2S] cfg keys: {list(cfg.keys())}", flush=True)
+    print(f"[S2S] selected_playlist_id={cfg.get('selected_playlist_id')!r}", flush=True)
+    print(f"[S2S] playlist_name={cfg.get('playlist_name')!r}", flush=True)
     playlist_url = ""
     try:
+        print("[S2S] calling emit(status, Connecting...)", flush=True)
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
+        print("[S2S] calling make_sp...", flush=True)
         sp   = make_sp(cfg)
+        print("[S2S] make_sp done, calling current_user...", flush=True)
         user = sp.current_user()
         user_id      = user["id"]
         display_name = user.get("display_name") or user_id
+        print(f"[S2S] logged in as {display_name} ({user_id})", flush=True)
         emit("status", {"msg": f"Logged in as {display_name}", "type": "success"})
 
         # Settings
@@ -231,29 +240,35 @@ def run_transfer(cfg, songs):
         is_new_playlist  = False
 
         # Resolve destination playlist
+        print(f"[S2S] resolving playlist: selected_pl_id={selected_pl_id!r} playlist_name={playlist_name!r} sync_mode={sync_mode}", flush=True)
         if selected_pl_id:
             # User picked an existing playlist from the dropdown
             playlist_id  = selected_pl_id
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+            print(f"[S2S] using selected playlist id={playlist_id}", flush=True)
             emit("status", {
                 "msg": f"Using playlist '{selected_pl_name or playlist_id}'",
                 "type": "info"
             })
         else:
             # Find or create by name
+            print(f"[S2S] searching for existing playlist '{playlist_name}'...", flush=True)
             existing = find_playlist_by_name(sp, user_id, playlist_name) if sync_mode else None
             if existing:
                 playlist_id  = existing["id"]
                 playlist_url = existing["external_urls"]["spotify"]
+                print(f"[S2S] found existing playlist id={playlist_id}", flush=True)
                 emit("status", {
                     "msg": f"Found '{playlist_name}' — syncing new songs only",
                     "type": "info"
                 })
             else:
+                print(f"[S2S] creating new playlist '{playlist_name}'...", flush=True)
                 pl = create_playlist(sp, user_id, playlist_name, public)
                 playlist_id     = pl["id"]
                 playlist_url    = f"https://open.spotify.com/playlist/{playlist_id}"
                 is_new_playlist = True
+                print(f"[S2S] created playlist id={playlist_id}", flush=True)
                 emit("status", {
                     "msg": f"Created new playlist '{playlist_name}'",
                     "type": "success"
@@ -264,10 +279,13 @@ def run_transfer(cfg, songs):
         # Fetch existing track IDs (skip for brand-new playlists)
         if is_new_playlist:
             existing_ids = set()
+            print("[S2S] new playlist — skipping duplicate check", flush=True)
             emit("status", {"msg": "New playlist — no duplicate check needed", "type": "info"})
         else:
+            print(f"[S2S] fetching existing track IDs for playlist {playlist_id}...", flush=True)
             emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
             existing_ids = get_playlist_track_ids(sp, playlist_id)
+            print(f"[S2S] got {len(existing_ids)} existing track IDs", flush=True)
             emit("status", {
                 "msg": f"{len(existing_ids)} track(s) already in playlist — will skip these",
                 "type": "info"
@@ -278,10 +296,13 @@ def run_transfer(cfg, songs):
         added = skipped = csv_dupes = 0
         not_found = []
 
+        print(f"[S2S] starting song loop: {total} songs, delay={delay}s", flush=True)
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
+                print("[S2S] shutdown_event set — stopping loop", flush=True)
                 break
             try:
+                print(f"[S2S] song {i}/{total}: searching '{title}' by '{artist}'...", flush=True)
                 results = sp.search(
                     q=f"track:{title} artist:{artist}",
                     type="track",
@@ -292,6 +313,7 @@ def run_transfer(cfg, songs):
                     tid     = tracks[0]["id"]
                     tname   = tracks[0]["name"]
                     tartist = tracks[0]["artists"][0]["name"]
+                    print(f"[S2S]   found: {tname} by {tartist} (id={tid})", flush=True)
 
                     if tid in existing_ids:
                         skipped += 1
@@ -361,8 +383,12 @@ def run_transfer(cfg, songs):
         })
 
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[S2S] EXCEPTION in run_transfer:\n{tb}", flush=True)
         emit("error", {"msg": str(e)})
     finally:
+        print("[S2S] run_transfer DONE, setting transfer_running=False", flush=True)
         transfer_running = False
 
 

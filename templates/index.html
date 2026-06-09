@@ -570,9 +570,9 @@
       allPlaylists.forEach(pl => {
         const opt = document.createElement('option');
         opt.value = pl.id;
-        opt.textContent = `${pl.name} (${pl.tracks} tracks)`;
+        opt.textContent = `${pl.name} (${pl.total} tracks)`;
         opt.dataset.name   = pl.name;
-        opt.dataset.tracks = pl.tracks;
+        opt.dataset.tracks = pl.total;
         sel.appendChild(opt);
       });
       onPlaylistSelect();
@@ -586,7 +586,7 @@
     const opt = sel.options[sel.selectedIndex];
     const tc  = document.getElementById('pl-track-count');
     if (opt && opt.value) {
-      tc.textContent = `${opt.dataset.tracks || 0} tracks currently in this playlist`;
+      tc.textContent = `${opt.dataset.tracks != null ? opt.dataset.tracks : 0} tracks currently in this playlist`;
     } else {
       tc.textContent = '';
     }
