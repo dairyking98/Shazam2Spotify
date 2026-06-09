@@ -95,15 +95,16 @@ def make_sp(cfg):
 
 
 def get_all_playlist_track_ids(sp, playlist_id):
+    # Use direct API call — sp.playlist_items with fields= can 403 on some app configs
     ids = set()
     offset = 0
     while True:
-        results = sp.playlist_items(
-            playlist_id, fields="items(track(id)),next",
+        results = sp._get(
+            f"playlists/{playlist_id}/tracks",
             limit=100, offset=offset
         )
-        for item in results["items"]:
-            if item.get("track") and item["track"].get("id"):
+        for item in results.get("items", []):
+            if item and item.get("track") and item["track"].get("id"):
                 ids.add(item["track"]["id"])
         if results.get("next"):
             offset += 100
@@ -131,13 +132,9 @@ def remove_playlist_duplicates(sp, playlist_id):
     items = []
     offset = 0
     while True:
-        results = sp.playlist_items(
-            playlist_id,
-            fields="items(track(id,uri)),next",
-            limit=100, offset=offset
-        )
-        for item in results["items"]:
-            if item.get("track") and item["track"].get("id"):
+        results = sp._get(f"playlists/{playlist_id}/tracks", limit=100, offset=offset)
+        for item in results.get("items", []):
+            if item and item.get("track") and item["track"].get("id"):
                 items.append({"id": item["track"]["id"], "uri": item["track"]["uri"]})
         if results.get("next"):
             offset += 100
@@ -156,8 +153,9 @@ def remove_playlist_duplicates(sp, playlist_id):
     removed = 0
     for uri, positions in uri_positions.items():
         for pos in sorted(positions, reverse=True):
-            sp.playlist_remove_specific_occurrences_of_items(
-                playlist_id, [{"uri": uri, "positions": [pos]}]
+            sp._delete(
+                f"playlists/{playlist_id}/tracks",
+                payload={"tracks": [{"uri": uri, "positions": [pos]}]}
             )
             removed += 1
             time.sleep(0.2)
@@ -260,7 +258,7 @@ def run_transfer(cfg, songs):
                         emit("song", {"i": i, "total": total, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
-                        sp.playlist_add_items(playlist_id, [tid])
+                        sp._post(f"playlists/{playlist_id}/tracks", payload={"uris": [f"spotify:track:{tid}"]})
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
