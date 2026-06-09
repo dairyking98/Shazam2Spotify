@@ -216,11 +216,12 @@ def run_transfer(cfg, songs):
     print(f"[S2S] run_transfer started: {len(songs)} songs", flush=True)
     playlist_url = ""
     try:
-        print("[S2S] Connecting to Spotify...", flush=True)
+        # Use pre-fetched token and user info from the main thread (no blocking calls here)
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
-        sp   = make_sp(cfg)
-        user = sp.current_user()
-        emit("status", {"msg": f"Logged in as {user['display_name']}", "type": "success"})
+        sp = make_sp(cfg)
+        user_id      = cfg.get("_user_id", "")
+        display_name = cfg.get("_user_display_name", "Spotify User")
+        emit("status", {"msg": f"Logged in as {display_name}", "type": "success"})
 
         playlist_name    = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
         selected_pl_id   = cfg.get("selected_playlist_id", "")   # set when user picks from dropdown
@@ -242,7 +243,7 @@ def run_transfer(cfg, songs):
         else:
             # User typed a new playlist name — search for it first to avoid duplicates
             emit("status", {"msg": f"Searching for existing playlist '{playlist_name}'...", "type": "info"})
-            existing = find_existing_playlist(sp, user["id"], playlist_name)
+            existing = find_existing_playlist(sp, user_id, playlist_name)
             if existing:
                 playlist_id  = existing["id"]
                 playlist_url = existing["external_urls"]["spotify"]
@@ -559,10 +560,9 @@ def start_transfer():
                 "selected_playlist_id", "selected_playlist_name"):
         if key in data:
             cfg[key] = data[key]
-    # Pre-authenticate in the main (request) thread so the worker thread
-    # receives a ready access token and never needs to call SpotifyOAuth.
-    # SpotifyOAuth is not thread-safe: token refresh inside a daemon thread
-    # can deadlock on the .cache file lock, causing the worker to hang forever.
+    # Pre-authenticate AND pre-fetch user info in the main (request) thread.
+    # The worker thread must not make any SpotifyOAuth or blocking Spotify calls
+    # at startup — they can hang indefinitely due to thread/network issues.
     try:
         auth_manager = make_auth_manager(cfg)
         token_info   = auth_manager.get_cached_token()
@@ -571,6 +571,11 @@ def start_transfer():
         if auth_manager.is_token_expired(token_info):
             token_info = auth_manager.refresh_access_token(token_info["refresh_token"])
         cfg["_access_token"] = token_info["access_token"]
+        # Pre-fetch user info so the worker never calls sp.current_user()
+        sp_main = make_sp(cfg)
+        user_info = sp_main.current_user()
+        cfg["_user_id"]           = user_info["id"]
+        cfg["_user_display_name"] = user_info.get("display_name", "Unknown")
     except Exception as e:
         return jsonify({"error": f"Spotify auth failed: {e}"}), 401
     transfer_queue   = queue.Queue()
