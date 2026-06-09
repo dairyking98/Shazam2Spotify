@@ -259,6 +259,7 @@ def run_transfer(cfg, songs):
         session_ids = set()
         added = skipped = csv_dupes = 0
         not_found = []
+        all_results = []  # full log: (original_title, original_artist, matched_title, matched_artist, status)
 
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
@@ -272,10 +273,12 @@ def run_transfer(cfg, songs):
                     tartist = tracks[0]["artists"][0]["name"]
                     if tid in existing_ids:
                         skipped += 1
+                        all_results.append((title, artist, tname, tartist, "Already in playlist"))
                         emit("song", {"i": i, "total": total, "status": "skipped",
                                       "title": tname, "artist": tartist, "msg": "Already in playlist"})
                     elif skip_dupes and tid in session_ids:
                         csv_dupes += 1
+                        all_results.append((title, artist, tname, tartist, "Duplicate in CSV"))
                         emit("song", {"i": i, "total": total, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
@@ -284,10 +287,12 @@ def run_transfer(cfg, songs):
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
+                        all_results.append((title, artist, tname, tartist, "Added"))
                         emit("song", {"i": i, "total": total, "status": "added",
                                       "title": tname, "artist": tartist, "msg": "Added"})
                 else:
                     not_found.append(f"{title} — {artist}")
+                    all_results.append((title, artist, "", "", "Not found on Spotify"))
                     emit("song", {"i": i, "total": total, "status": "notfound",
                                   "title": title, "artist": artist, "msg": "Not found on Spotify"})
                 time.sleep(delay)
@@ -306,11 +311,28 @@ def run_transfer(cfg, songs):
             except Exception as e:
                 emit("status", {"msg": f"Duplicate removal error: {e}", "type": "error"})
 
+        # Write full results CSV
+        import csv as csv_mod
+        from datetime import datetime
+        report_name = f"transfer_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        report_path = os.path.join(BASE_DIR, "library", report_name)
+        try:
+            with open(report_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv_mod.writer(f)
+                writer.writerow(["Shazam Title", "Shazam Artist", "Spotify Title", "Spotify Artist", "Status"])
+                for row in all_results:
+                    writer.writerow(row)
+            emit("status", {"msg": f"Report saved: {report_name}", "type": "success"})
+        except Exception as e:
+            report_name = ""
+            emit("status", {"msg": f"Could not save report: {e}", "type": "error"})
+
         emit("done", {
             "total": total, "added": added, "skipped": skipped,
             "csv_dupes": csv_dupes, "dupes_removed": dupes_removed,
             "not_found": not_found, "playlist_url": playlist_url,
             "open_browser": cfg.get("open_browser", True),
+            "report_file": report_name,
         })
 
     except Exception as e:
@@ -525,6 +547,17 @@ def logout():
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return redirect(url_for("index"))
+
+
+@app.route("/download_report/<filename>")
+def download_report(filename):
+    """Download a transfer report CSV from the library folder."""
+    from flask import send_from_directory
+    # Security: only allow filenames that match the expected pattern
+    import re
+    if not re.match(r'^transfer_report_\d{8}_\d{6}\.csv$', filename):
+        return "Invalid filename", 400
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

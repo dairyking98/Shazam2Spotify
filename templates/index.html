@@ -477,12 +477,16 @@
       <span id="stat-notfound-count"></span> songs not found on Spotify
     </div>
 
-    <div id="done-actions" class="hidden" style="margin-top:16px">
+    <div id="done-actions" class="hidden" style="margin-top:16px;display:flex;flex-wrap:wrap;gap:8px">
       <a id="playlist-link" href="#" target="_blank" class="btn btn-green">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
         Open Playlist in Spotify
       </a>
-      <button class="btn btn-outline" style="margin-left:8px" onclick="resetTransfer()">New Transfer</button>
+      <a id="report-link" href="#" class="btn btn-outline" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+        Download Report CSV
+      </a>
+      <button class="btn btn-outline" onclick="resetTransfer()">New Transfer</button>
     </div>
   </div>
 
@@ -741,6 +745,12 @@
       if (d.skipped)       summary += `, ${d.skipped} already in playlist`;
       if (d.dupes_removed) summary += `, ${d.dupes_removed} duplicates removed`;
       addLog(summary, 'success');
+      if (d.playlist_url) document.getElementById('playlist-link').href = d.playlist_url;
+      if (d.report_file) {
+        const rl = document.getElementById('report-link');
+        rl.href = '/download_report/' + d.report_file;
+        rl.style.display = '';
+      }
       if (d.open_browser && d.playlist_url) window.open(d.playlist_url, '_blank');
       eventSource.close();
     }
