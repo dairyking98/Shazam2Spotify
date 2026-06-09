@@ -113,9 +113,10 @@ def get_all_playlist_track_ids(sp, playlist_id):
 
 
 def find_existing_playlist(sp, user_id, name):
+    # Use current_user_playlists (sp.user_playlists was removed by Spotify in 2024)
     offset = 0
     while True:
-        results = sp.user_playlists(user_id, limit=50, offset=offset)
+        results = sp.current_user_playlists(limit=50, offset=offset)
         for pl in results["items"]:
             if pl["owner"]["id"] == user_id and pl["name"] == name:
                 return pl
@@ -217,7 +218,7 @@ def run_transfer(cfg, songs):
         else:
             playlist = sp.user_playlist_create(
                 user=user["id"], name=playlist_name, public=public,
-                description="Created by Shazam2Spotify"
+                description="Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify"
             )
             playlist_id  = playlist["id"]
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
