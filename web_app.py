@@ -16,7 +16,7 @@ import webbrowser
 
 from flask import (
     Flask, Response, jsonify, redirect, render_template,
-    request, stream_with_context, url_for
+    request, url_for
 )
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -90,10 +90,7 @@ def make_auth_manager(cfg):
     )
 
 
-def make_sp(cfg, new_session=False):
-    """Create a Spotify client.
-    new_session=True: ignored (kept for API compatibility), always uses auth_manager.
-    """
+def make_sp(cfg):
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
 
 
@@ -120,27 +117,17 @@ def get_all_playlist_track_ids(sp, playlist_id):
 
 def find_existing_playlist(sp, user_id, name):
     # Direct call to /v1/me/playlists — works on all spotipy versions
-    # When multiple playlists share the same name (from failed runs), pick the one
-    # with the most tracks so we always reuse the populated playlist.
-    matches = []
     offset = 0
     while True:
         results = sp._get("me/playlists", limit=50, offset=offset)
-        for pl in (results.get("items") or []):
-            if pl and pl.get("name") == name:
-                matches.append(pl)
+        for pl in results["items"]:
+            if pl["owner"]["id"] == user_id and pl["name"] == name:
+                return pl
         if results.get("next"):
             offset += 50
         else:
             break
-    if not matches:
-        return None
-    # Pick the playlist with the highest track count
-    # Feb 2026: 'tracks' renamed to 'items' in playlist objects
-    def _track_count(p):
-        obj = p.get("items") or p.get("tracks") or {}
-        return obj.get("total", 0)
-    return max(matches, key=_track_count)
+    return None
 
 
 def remove_playlist_duplicates(sp, playlist_id):
@@ -212,41 +199,34 @@ def run_transfer(cfg, songs):
     def emit(event, data):
         transfer_queue.put({"event": event, "data": data})
 
-    print(f"[S2S] run_transfer started: {len(songs)} songs", flush=True)
     playlist_url = ""
     try:
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
         sp   = make_sp(cfg)
         user = sp.current_user()
-        user_id      = user["id"]
-        display_name = user.get("display_name", user_id)
-        emit("status", {"msg": f"Logged in as {display_name}", "type": "success"})
+        emit("status", {"msg": f"Logged in as {user['display_name']}", "type": "success"})
 
         playlist_name    = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
-        selected_pl_id   = cfg.get("selected_playlist_id", "")   # set when user picks from dropdown
-        selected_pl_name = cfg.get("selected_playlist_name", "") # display name for the chosen playlist
-        public           = cfg.get("public_playlist", True)
-        sync_mode        = cfg.get("sync_mode", True)
-        remove_dupes     = cfg.get("remove_duplicates", False)
-        skip_dupes       = cfg.get("skip_duplicates", True)
-        delay            = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
-
+        selected_pl_id   = cfg.get("selected_playlist_id", "")
+        selected_pl_name = cfg.get("selected_playlist_name", "")
+        public        = cfg.get("public_playlist", True)
+        sync_mode     = cfg.get("sync_mode", True)
+        remove_dupes  = cfg.get("remove_duplicates", False)
+        skip_dupes    = cfg.get("skip_duplicates", True)
+        delay         = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
         is_new_playlist = False
-
         if selected_pl_id:
             # User picked an existing playlist from the dropdown
             playlist_id  = selected_pl_id
-            display_name = selected_pl_name or playlist_id
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-            emit("status", {"msg": f"Using selected playlist '{display_name}'", "type": "info"})
+            emit("status", {"msg": f"Using playlist '{selected_pl_name or playlist_id}'", "type": "info"})
         else:
-            # User typed a new playlist name — search for it first to avoid duplicates
-            emit("status", {"msg": f"Searching for existing playlist '{playlist_name}'...", "type": "info"})
-            existing = find_existing_playlist(sp, user_id, playlist_name)
+            # Find or create playlist by name
+            existing = find_existing_playlist(sp, user["id"], playlist_name) if sync_mode else None
             if existing:
                 playlist_id  = existing["id"]
                 playlist_url = existing["external_urls"]["spotify"]
-                emit("status", {"msg": f"Found '{playlist_name}' — will add songs to it", "type": "info"})
+                emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
             else:
                 playlist = sp._post(
                     "me/playlists",
@@ -262,28 +242,25 @@ def run_transfer(cfg, songs):
                 emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
-        # Fetch existing tracks to skip already-added songs.
+        # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
         if is_new_playlist:
             existing_ids = set()
-            emit("status", {"msg": "New playlist — no duplicate check needed", "type": "info"})
-        elif sync_mode:
+            emit("status", {"msg": "New playlist — skipping duplicate check", "type": "info"})
+        else:
             emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
             existing_ids = get_all_playlist_track_ids(sp, playlist_id)
-            emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist — will skip these", "type": "info"})
-        else:
-            existing_ids = set()
+            emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
 
         total       = len(songs)
         session_ids = set()
         added = skipped = csv_dupes = 0
         not_found = []
-        all_results = []  # full log: (original_title, original_artist, matched_title, matched_artist, status)
 
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
                 break
             try:
-                results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)  # noqa: limit=1 is within the new max of 10
+                results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)
                 tracks  = results["tracks"]["items"]
                 if tracks:
                     tid     = tracks[0]["id"]
@@ -291,42 +268,29 @@ def run_transfer(cfg, songs):
                     tartist = tracks[0]["artists"][0]["name"]
                     if tid in existing_ids:
                         skipped += 1
-                        all_results.append((title, artist, tname, tartist, "Already in playlist"))
                         emit("song", {"i": i, "total": total, "status": "skipped",
                                       "title": tname, "artist": tartist, "msg": "Already in playlist"})
-                        # No delay needed for skipped songs — no API write call was made
-                        continue
                     elif skip_dupes and tid in session_ids:
                         csv_dupes += 1
-                        all_results.append((title, artist, tname, tartist, "Duplicate in CSV"))
                         emit("song", {"i": i, "total": total, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
-                        continue
                     else:
                         # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
                         sp._post(f"playlists/{playlist_id}/items", payload={"uris": [f"spotify:track:{tid}"]})
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
-                        all_results.append((title, artist, tname, tartist, "Added"))
                         emit("song", {"i": i, "total": total, "status": "added",
                                       "title": tname, "artist": tartist, "msg": "Added"})
                 else:
                     not_found.append(f"{title} — {artist}")
-                    all_results.append((title, artist, "", "", "Not found on Spotify"))
                     emit("song", {"i": i, "total": total, "status": "notfound",
                                   "title": title, "artist": artist, "msg": "Not found on Spotify"})
                 time.sleep(delay)
             except Exception as e:
-                err_msg = str(e)
-                all_results.append((title, artist, "", "", f"Error: {err_msg}"))
                 emit("song", {"i": i, "total": total, "status": "error",
-                              "title": title, "artist": artist, "msg": err_msg})
-                # Back off longer on rate limit errors (429)
-                if "429" in err_msg or "rate" in err_msg.lower():
-                    time.sleep(5)
-                else:
-                    time.sleep(1)
+                              "title": title, "artist": artist, "msg": str(e)})
+                time.sleep(1)
 
         # Remove duplicates pass
         dupes_removed = 0
@@ -338,37 +302,16 @@ def run_transfer(cfg, songs):
             except Exception as e:
                 emit("status", {"msg": f"Duplicate removal error: {e}", "type": "error"})
 
-        # Write full results CSV
-        import csv as csv_mod
-        from datetime import datetime
-        report_name = f"transfer_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        report_path = os.path.join(BASE_DIR, "library", report_name)
-        try:
-            with open(report_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv_mod.writer(f)
-                writer.writerow(["Shazam Title", "Shazam Artist", "Spotify Title", "Spotify Artist", "Status"])
-                for row in all_results:
-                    writer.writerow(row)
-            emit("status", {"msg": f"Report saved: {report_name}", "type": "success"})
-        except Exception as e:
-            report_name = ""
-            emit("status", {"msg": f"Could not save report: {e}", "type": "error"})
-
         emit("done", {
             "total": total, "added": added, "skipped": skipped,
             "csv_dupes": csv_dupes, "dupes_removed": dupes_removed,
             "not_found": not_found, "playlist_url": playlist_url,
             "open_browser": cfg.get("open_browser", True),
-            "report_file": report_name,
         })
 
     except Exception as e:
-        import traceback
-        print(f"[S2S] TRANSFER ERROR: {e}", flush=True)
-        traceback.print_exc()
         emit("error", {"msg": str(e)})
     finally:
-        print("[S2S] run_transfer finished", flush=True)
         transfer_running = False
 
 
@@ -532,16 +475,6 @@ def upload_csv():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/reset_transfer", methods=["POST"])
-def reset_transfer():
-    """Force-reset the transfer state so a new transfer can start.
-    Called automatically by the UI when the page loads or 'New Transfer' is clicked."""
-    global transfer_running, transfer_queue
-    transfer_running = False
-    transfer_queue   = queue.Queue()
-    return jsonify({"ok": True})
-
-
 @app.route("/start_transfer", methods=["POST"])
 def start_transfer():
     global transfer_running, transfer_thread, transfer_queue
@@ -578,7 +511,7 @@ def stream():
             except queue.Empty:
                 yield 'data: {"event":"ping"}\n\n'
     return Response(
-        stream_with_context(generate()),
+        generate(),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -596,22 +529,24 @@ def get_playlists():
             results = sp._get("me/playlists", limit=50, offset=offset)
             for pl in (results.get("items") or []):
                 if pl:
-                    # Feb 2026 API change: 'tracks' renamed to 'items' in playlist objects.
-                    # Fall back to 'tracks' for older API versions / cached responses.
-                    items_obj = pl.get("items") or pl.get("tracks") or {}
-                    playlists.append({
-                        "id":     pl.get("id"),
-                        "name":   pl.get("name"),
-                        "tracks": items_obj.get("total", 0),
-                        "url":    pl.get("external_urls", {}).get("spotify", ""),
-                    })
+                    total = (pl.get("items") or {}).get("total") or (pl.get("tracks") or {}).get("total") or 0
+                    playlists.append({"id": pl["id"], "name": pl["name"], "total": total})
             if results.get("next"):
                 offset += 50
             else:
                 break
-        return jsonify({"playlists": playlists})
+        return jsonify({"ok": True, "playlists": playlists})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/reset_transfer", methods=["POST"])
+def reset_transfer():
+    """Force-reset transfer state so a new transfer can start after a page reload."""
+    global transfer_running, transfer_queue
+    transfer_running = False
+    transfer_queue   = queue.Queue()
+    return jsonify({"ok": True})
 
 
 @app.route("/logout")
@@ -619,56 +554,6 @@ def logout():
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return redirect(url_for("index"))
-
-
-@app.route("/debug_playlist")
-def debug_playlist():
-    """Debug: list all playlists and show raw items structure for the one with most tracks."""
-    cfg = load_config()
-    try:
-        sp = make_sp(cfg)
-        all_pls = []
-        offset = 0
-        while True:
-            results = sp._get("me/playlists", limit=50, offset=offset)
-            for pl in (results.get("items") or []):
-                if pl:
-                    all_pls.append({"name": pl.get("name"), "id": pl.get("id"), "tracks": pl.get("tracks", {}).get("total", 0)})
-            if results.get("next"):
-                offset += 50
-            else:
-                break
-        # Find the playlist with the most tracks named Shazam2Spotify
-        s2s = [p for p in all_pls if p["name"] == "Shazam2Spotify"]
-        best = max(s2s, key=lambda p: p["tracks"]) if s2s else None
-        items_debug = {}
-        if best:
-            raw = sp._get(f"playlists/{best['id']}/items", limit=3, offset=0)
-            raw_items = raw.get("items", [])
-            items_debug = {
-                "first_item_keys": list(raw_items[0].keys()) if raw_items else [],
-                "first_track_keys": list((raw_items[0].get("track") or raw_items[0].get("item") or {}).keys()) if raw_items else [],
-                "first_item_raw": raw_items[0] if raw_items else None,
-            }
-        return jsonify({
-            "all_playlists": all_pls,
-            "shazam2spotify_playlists": s2s,
-            "best_match": best,
-            "items_debug": items_debug,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-
-@app.route("/download_report/<filename>")
-def download_report(filename):
-    """Download a transfer report CSV from the library folder."""
-    from flask import send_from_directory
-    # Security: only allow filenames that match the expected pattern
-    import re
-    if not re.match(r'^transfer_report_\d{8}_\d{6}\.csv$', filename):
-        return "Invalid filename", 400
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -685,14 +570,17 @@ if __name__ == "__main__":
     print("  Press Ctrl+C to stop")
     print("=" * 55 + "\n")
 
-    # Waitress does NOT support streaming responses (SSE) — it buffers the
-    # entire response before sending, so the progress stream never reaches
-    # the browser. Use Flask's built-in Werkzeug dev server with threading,
-    # which does support streaming. Ctrl+C is handled via the KeyboardInterrupt
-    # catch below.
+    # Use waitress (production WSGI server) — handles Ctrl+C cleanly
     try:
-        app.run(host="127.0.0.1", port=5000, debug=False,
-                use_reloader=False, threaded=True)
+        from waitress import serve
+        serve(app, host="127.0.0.1", port=5000, threads=8)
+    except ImportError:
+        # Fallback to Flask dev server if waitress not installed
+        try:
+            app.run(host="127.0.0.1", port=5000, debug=False,
+                    use_reloader=False, threaded=True)
+        except KeyboardInterrupt:
+            pass
     except KeyboardInterrupt:
         pass
     finally:
