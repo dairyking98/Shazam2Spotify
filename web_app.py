@@ -587,7 +587,6 @@ def start_transfer():
 
 @app.route("/stream")
 def stream():
-    @stream_with_context
     def generate():
         while not shutdown_event.is_set():
             try:
@@ -598,7 +597,7 @@ def stream():
             except queue.Empty:
                 yield 'data: {"event":"ping"}\n\n'
     return Response(
-        generate(),
+        stream_with_context(generate()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
