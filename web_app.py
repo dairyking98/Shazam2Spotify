@@ -38,22 +38,30 @@ shutdown_event   = threading.Event()   # set on Ctrl+C to unblock SSE streams
 
 def load_config():
     defaults = {
-        "client_id":        "",
-        "client_secret":    "",
-        "redirect_uri":     "http://127.0.0.1:5000/callback",
-        "playlist_name":    "Shazam2Spotify",
-        "open_browser":     True,
-        "public_playlist":  True,
-        "skip_duplicates":  True,
+        "client_id":         "",
+        "client_secret":     "",
+        "redirect_uri":      "http://127.0.0.1:5000/callback",
+        "playlist_name":     "Shazam2Spotify",
+        "open_browser":      True,
+        "public_playlist":   True,
+        "skip_duplicates":   True,
         "remove_duplicates": False,
-        "sync_mode":        True,
-        "delay_ms":         500,
+        "sync_mode":         True,
+        "delay_ms":          500,
     }
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
                 saved = json.load(f)
+            # Merge saved values on top of defaults so new keys are always present
             defaults.update(saved)
+        except Exception:
+            pass
+    else:
+        # First run — write a default config.json so the user can see it
+        try:
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(defaults, f, indent=2)
         except Exception:
             pass
     return defaults
