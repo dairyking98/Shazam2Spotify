@@ -303,21 +303,29 @@ def index():
 
 @app.route("/save_config", methods=["POST"])
 def save_config_route():
-    data = request.get_json() or {}
-    cfg  = load_config()
-    cfg.update({
-        "client_id":         data.get("client_id", cfg["client_id"]).strip(),
-        "client_secret":     data.get("client_secret", cfg["client_secret"]).strip(),
-        "redirect_uri":      data.get("redirect_uri", cfg["redirect_uri"]).strip(),
-        "playlist_name":     data.get("playlist_name", cfg["playlist_name"]).strip() or "Shazam2Spotify",
-        "open_browser":      bool(data.get("open_browser", cfg["open_browser"])),
-        "public_playlist":   bool(data.get("public_playlist", cfg["public_playlist"])),
-        "skip_duplicates":   bool(data.get("skip_duplicates", cfg["skip_duplicates"])),
-        "remove_duplicates": bool(data.get("remove_duplicates", cfg["remove_duplicates"])),
-        "sync_mode":         bool(data.get("sync_mode", cfg["sync_mode"])),
-        "delay_ms":          int(data.get("delay_ms", cfg["delay_ms"])),
+    data    = request.get_json() or {}
+    old_cfg = load_config()
+    new_id  = data.get("client_id", old_cfg["client_id"]).strip()
+    new_uri = data.get("redirect_uri", old_cfg["redirect_uri"]).strip()
+
+    # If credentials changed, wipe the stale .cache so spotipy doesn't reuse old tokens
+    if new_id != old_cfg["client_id"] or new_uri != old_cfg["redirect_uri"]:
+        if os.path.exists(CACHE_FILE):
+            os.remove(CACHE_FILE)
+
+    old_cfg.update({
+        "client_id":         new_id,
+        "client_secret":     data.get("client_secret", old_cfg["client_secret"]).strip(),
+        "redirect_uri":      new_uri,
+        "playlist_name":     data.get("playlist_name", old_cfg["playlist_name"]).strip() or "Shazam2Spotify",
+        "open_browser":      bool(data.get("open_browser", old_cfg["open_browser"])),
+        "public_playlist":   bool(data.get("public_playlist", old_cfg["public_playlist"])),
+        "skip_duplicates":   bool(data.get("skip_duplicates", old_cfg["skip_duplicates"])),
+        "remove_duplicates": bool(data.get("remove_duplicates", old_cfg["remove_duplicates"])),
+        "sync_mode":         bool(data.get("sync_mode", old_cfg["sync_mode"])),
+        "delay_ms":          int(data.get("delay_ms", old_cfg["delay_ms"])),
     })
-    write_config(cfg)
+    write_config(old_cfg)
     return jsonify({"ok": True})
 
 
