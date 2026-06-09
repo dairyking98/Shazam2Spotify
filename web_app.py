@@ -16,7 +16,7 @@ import webbrowser
 
 from flask import (
     Flask, Response, jsonify, redirect, render_template,
-    request, url_for
+    request, stream_with_context, url_for
 )
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -575,6 +575,7 @@ def start_transfer():
 
 @app.route("/stream")
 def stream():
+    @stream_with_context
     def generate():
         while not shutdown_event.is_set():
             try:
@@ -692,17 +693,14 @@ if __name__ == "__main__":
     print("  Press Ctrl+C to stop")
     print("=" * 55 + "\n")
 
-    # Use waitress (production WSGI server) — handles Ctrl+C cleanly
+    # Waitress does NOT support streaming responses (SSE) — it buffers the
+    # entire response before sending, so the progress stream never reaches
+    # the browser. Use Flask's built-in Werkzeug dev server with threading,
+    # which does support streaming. Ctrl+C is handled via the KeyboardInterrupt
+    # catch below.
     try:
-        from waitress import serve
-        serve(app, host="127.0.0.1", port=5000, threads=8)
-    except ImportError:
-        # Fallback to Flask dev server if waitress not installed
-        try:
-            app.run(host="127.0.0.1", port=5000, debug=False,
-                    use_reloader=False, threaded=True)
-        except KeyboardInterrupt:
-            pass
+        app.run(host="127.0.0.1", port=5000, debug=False,
+                use_reloader=False, threaded=True)
     except KeyboardInterrupt:
         pass
     finally:
