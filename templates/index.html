@@ -771,47 +771,64 @@
 
   // ── Transfer ───────────────────────────────────────────────────────────────
   async function startTransfer() {
-    if (!loadedSongs.length) return;
-    try { await saveConfig(); } catch(e) { console.warn('saveConfig failed:', e); }
+    console.log('[S2S] startTransfer() called');
+    console.log('[S2S] loadedSongs.length =', loadedSongs.length);
+    if (!loadedSongs.length) { console.warn('[S2S] No songs loaded, aborting'); return; }
+
+    try { await saveConfig(); console.log('[S2S] saveConfig OK'); }
+    catch(e) { console.warn('[S2S] saveConfig failed (non-fatal):', e); }
 
     // Determine playlist target from current mode
     let selectedPlaylistId   = '';
     let selectedPlaylistName = '';
     let newPlaylistName      = 'Shazam2Spotify';
 
+    console.log('[S2S] playlistMode =', playlistMode);
     if (playlistMode === 'existing') {
       const sel = document.getElementById('playlist_select');
-      const opt = sel.options[sel.selectedIndex];
+      const opt = sel ? sel.options[sel.selectedIndex] : null;
+      console.log('[S2S] selected option:', opt ? opt.value : 'null');
       if (!opt || !opt.value) { alert('Please select a playlist first.'); return; }
       selectedPlaylistId   = opt.value;
       selectedPlaylistName = opt.dataset.name || opt.textContent;
     } else {
       const nameEl = document.getElementById('playlist_name');
-      newPlaylistName = nameEl.value.trim() || 'Shazam2Spotify';
+      newPlaylistName = nameEl ? (nameEl.value.trim() || 'Shazam2Spotify') : 'Shazam2Spotify';
+      console.log('[S2S] new playlist name:', newPlaylistName);
     }
 
     const payload = {
-      songs:                 loadedSongs,
-      // playlist_name is used only when creating a new playlist
-      playlist_name:         newPlaylistName,
-      // these two are used when picking an existing playlist
-      selected_playlist_id:  selectedPlaylistId,
+      songs:                  loadedSongs,
+      playlist_name:          newPlaylistName,
+      selected_playlist_id:   selectedPlaylistId,
       selected_playlist_name: selectedPlaylistName,
-      open_browser:          document.getElementById('open_browser').checked,
-      public_playlist:       document.getElementById('public_playlist').checked,
-      skip_duplicates:       document.getElementById('skip_duplicates').checked,
-      remove_duplicates:     document.getElementById('remove_duplicates').checked,
-      sync_mode:             document.getElementById('sync_mode').checked,
-      delay_ms:              parseInt(document.getElementById('delay_ms').value) || 500,
+      open_browser:           document.getElementById('open_browser').checked,
+      public_playlist:        document.getElementById('public_playlist').checked,
+      skip_duplicates:        document.getElementById('skip_duplicates').checked,
+      remove_duplicates:      document.getElementById('remove_duplicates').checked,
+      sync_mode:              document.getElementById('sync_mode').checked,
+      delay_ms:               parseInt(document.getElementById('delay_ms').value) || 500,
     };
+    console.log('[S2S] payload (no songs):', {...payload, songs: `[${payload.songs.length} songs]`});
 
-    const res  = await fetch('/start_transfer', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (data.error) { alert(data.error); return; }
+    let res, data;
+    try {
+      console.log('[S2S] POSTing to /start_transfer...');
+      res  = await fetch('/start_transfer', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      console.log('[S2S] /start_transfer HTTP status:', res.status);
+      data = await res.json();
+      console.log('[S2S] /start_transfer response:', data);
+    } catch(e) {
+      console.error('[S2S] fetch /start_transfer threw:', e);
+      alert('Network error sending transfer request: ' + e);
+      return;
+    }
+    if (data.error) { alert('Server error: ' + data.error); return; }
 
+    console.log('[S2S] Transfer started OK, showing progress card');
     document.getElementById('card-progress').classList.remove('hidden');
     document.getElementById('start-btn').disabled = true;
     document.getElementById('log').innerHTML = '';
@@ -821,10 +838,13 @@
     document.getElementById('progress-bar').style.width = '0%';
 
     if (eventSource) eventSource.close();
+    console.log('[S2S] Opening EventSource /stream...');
     eventSource = new EventSource('/stream');
+    eventSource.onopen  = () => console.log('[S2S] SSE stream opened');
     eventSource.onmessage = handleStreamEvent;
-    eventSource.onerror = () => {
-      addLog('Connection error', 'error');
+    eventSource.onerror = (e) => {
+      console.error('[S2S] SSE stream error:', e);
+      addLog('Connection error — check browser console', 'error');
       eventSource.close();
     };
   }
