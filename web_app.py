@@ -316,12 +316,28 @@ def run_transfer(cfg, songs):
                 print("[S2S] shutdown_event set — stopping loop", flush=True)
                 break
             try:
+                # Retry up to 3 times on 429 rate-limit errors
                 print(f"[S2S] song {i}/{total}: searching '{title}' by '{artist}'...", flush=True)
-                results = sp.search(
-                    q=f"track:{title} artist:{artist}",
-                    type="track",
-                    limit=1
-                )
+                results = None
+                for attempt in range(3):
+                    try:
+                        results = sp.search(
+                            q=f"track:{title} artist:{artist}",
+                            type="track",
+                            limit=1
+                        )
+                        break  # success
+                    except spotipy.SpotifyException as exc:
+                        if exc.http_status == 429:
+                            retry_after = int(exc.headers.get("Retry-After", 5)) if exc.headers else 5
+                            retry_after = max(retry_after, 2)  # at least 2s
+                            print(f"[S2S]   429 rate limit — waiting {retry_after}s (attempt {attempt+1}/3)", flush=True)
+                            emit("status", {"msg": f"Rate limited by Spotify — waiting {retry_after}s...", "type": "info"})
+                            time.sleep(retry_after)
+                        else:
+                            raise
+                if results is None:
+                    raise RuntimeError("Search failed after 3 retries (rate limited)")
                 tracks = results["tracks"]["items"]
                 if tracks:
                     tid     = tracks[0]["id"]
