@@ -94,13 +94,14 @@ def make_sp(cfg):
 
 
 def make_sp_with_token(token):
-    """Create a Spotify client using a raw access token and a fresh requests.Session.
-    This avoids the Windows urllib3 connection-pool deadlock that occurs when
-    spotipy's SpotifyOAuth session (created in the main thread) is reused in a
-    worker thread.  A brand-new session is created here, inside the worker."""
-    import requests as _requests
-    sess = _requests.Session()
-    return spotipy.Spotify(auth=token, requests_session=sess)
+    """Create a Spotify client using a raw access token.
+    Called from inside the worker thread so spotipy._build_session() creates
+    a brand-new requests.Session (with the full retry/backoff adapter) that is
+    never shared with the main Flask thread — avoiding the Windows urllib3
+    connection-pool deadlock that caused sp.search() to hang indefinitely.
+    requests_session=True (default) tells spotipy to call _build_session(),
+    which mounts the Retry adapter including 429 handling."""
+    return spotipy.Spotify(auth=token)
 
 
 def get_playlist_track_ids(sp, playlist_id):
