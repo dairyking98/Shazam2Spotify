@@ -117,19 +117,23 @@ def get_all_playlist_track_ids(sp, playlist_id):
 
 def find_existing_playlist(sp, user_id, name):
     # Direct call to /v1/me/playlists — works on all spotipy versions
-    # Note: /me/playlists only returns playlists the user owns or follows,
-    # so no need to filter by owner — just match by name.
+    # When multiple playlists share the same name (from failed runs), pick the one
+    # with the most tracks so we always reuse the populated playlist.
+    matches = []
     offset = 0
     while True:
         results = sp._get("me/playlists", limit=50, offset=offset)
         for pl in (results.get("items") or []):
             if pl and pl.get("name") == name:
-                return pl
+                matches.append(pl)
         if results.get("next"):
             offset += 50
         else:
             break
-    return None
+    if not matches:
+        return None
+    # Pick the playlist with the highest track count
+    return max(matches, key=lambda p: p.get("tracks", {}).get("total", 0))
 
 
 def remove_playlist_duplicates(sp, playlist_id):
@@ -562,28 +566,38 @@ def logout():
 
 @app.route("/debug_playlist")
 def debug_playlist():
-    """Debug: show raw structure of first few playlist items to verify field names."""
+    """Debug: list all playlists and show raw items structure for the one with most tracks."""
     cfg = load_config()
     try:
         sp = make_sp(cfg)
-        playlists = sp._get("me/playlists", limit=1)
-        if not playlists["items"]:
-            return jsonify({"error": "No playlists found"})
-        pl_id = playlists["items"][0]["id"]
-        pl_name = playlists["items"][0]["name"]
-        # Fetch first 3 items raw
-        results = sp._get(f"playlists/{pl_id}/items", limit=3, offset=0)
-        # Show full raw structure of first item
-        raw_items = results.get("items", [])
-        first_keys = list(raw_items[0].keys()) if raw_items else []
-        first_track_keys = list(raw_items[0].get("track", raw_items[0].get("item", {})).keys()) if raw_items else []
+        all_pls = []
+        offset = 0
+        while True:
+            results = sp._get("me/playlists", limit=50, offset=offset)
+            for pl in (results.get("items") or []):
+                if pl:
+                    all_pls.append({"name": pl.get("name"), "id": pl.get("id"), "tracks": pl.get("tracks", {}).get("total", 0)})
+            if results.get("next"):
+                offset += 50
+            else:
+                break
+        # Find the playlist with the most tracks named Shazam2Spotify
+        s2s = [p for p in all_pls if p["name"] == "Shazam2Spotify"]
+        best = max(s2s, key=lambda p: p["tracks"]) if s2s else None
+        items_debug = {}
+        if best:
+            raw = sp._get(f"playlists/{best['id']}/items", limit=3, offset=0)
+            raw_items = raw.get("items", [])
+            items_debug = {
+                "first_item_keys": list(raw_items[0].keys()) if raw_items else [],
+                "first_track_keys": list((raw_items[0].get("track") or raw_items[0].get("item") or {}).keys()) if raw_items else [],
+                "first_item_raw": raw_items[0] if raw_items else None,
+            }
         return jsonify({
-            "playlist": pl_name,
-            "playlist_id": pl_id,
-            "total_items": results.get("total"),
-            "first_item_keys": first_keys,
-            "first_track_keys": first_track_keys,
-            "first_item_raw": raw_items[0] if raw_items else None,
+            "all_playlists": all_pls,
+            "shazam2spotify_playlists": s2s,
+            "best_match": best,
+            "items_debug": items_debug,
         })
     except Exception as e:
         return jsonify({"error": str(e)})
