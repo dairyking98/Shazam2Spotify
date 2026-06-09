@@ -387,6 +387,26 @@ def check_auth():
         return jsonify({"authenticated": False})
 
 
+@app.route("/token_info")
+def token_info():
+    """Debug route: shows what scopes the current cached token has."""
+    cfg = load_config()
+    if not os.path.exists(CACHE_FILE):
+        return jsonify({"error": "No .cache file found — not authenticated yet"})
+    try:
+        auth = make_auth_manager(cfg)
+        token = auth.get_cached_token()
+        if not token:
+            return jsonify({"error": "No cached token"})
+        return jsonify({
+            "scope": token.get("scope", "(none)"),
+            "expires_at": token.get("expires_at"),
+            "token_type": token.get("token_type"),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route("/upload_csv", methods=["POST"])
 def upload_csv():
     if "csv_file" not in request.files:
