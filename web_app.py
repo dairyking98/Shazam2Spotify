@@ -38,24 +38,10 @@ CACHE_FILE    = os.path.join(BASE_DIR, ".cache")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ── Global transfer state ─────────────────────────────────────────────────────
-# IMPORTANT: transfer_queue must NEVER be replaced with a new object.
-# The /stream generator captures a reference to this object at request time.
-# If /start_transfer creates a new Queue(), /stream will keep reading from
-# the old empty one and never see any events.
-# Instead, drain the existing queue in-place before each new transfer.
 transfer_queue   = queue.Queue()
 transfer_running = False
 transfer_thread  = None
 shutdown_event   = threading.Event()
-
-
-def _drain_queue():
-    """Empty the global transfer_queue without replacing it."""
-    while True:
-        try:
-            transfer_queue.get_nowait()
-        except queue.Empty:
-            break
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -223,8 +209,10 @@ def run_transfer(cfg, songs):
     def emit(event, data):
         transfer_queue.put({"event": event, "data": data})
 
+    print(f"[S2S] run_transfer started: {len(songs)} songs", flush=True)
     playlist_url = ""
     try:
+        print("[S2S] Connecting to Spotify...", flush=True)
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
         sp   = make_sp(cfg)
         user = sp.current_user()
@@ -371,8 +359,12 @@ def run_transfer(cfg, songs):
         })
 
     except Exception as e:
+        import traceback
+        print(f"[S2S] TRANSFER ERROR: {e}", flush=True)
+        traceback.print_exc()
         emit("error", {"msg": str(e)})
     finally:
+        print("[S2S] run_transfer finished", flush=True)
         transfer_running = False
 
 
@@ -539,11 +531,10 @@ def upload_csv():
 @app.route("/reset_transfer", methods=["POST"])
 def reset_transfer():
     """Force-reset the transfer state so a new transfer can start.
-    Called automatically by the UI when the page loads or 'New Transfer' is clicked.
-    IMPORTANT: drain the queue in-place, never replace it — /stream holds a reference."""
-    global transfer_running
+    Called automatically by the UI when the page loads or 'New Transfer' is clicked."""
+    global transfer_running, transfer_queue
     transfer_running = False
-    _drain_queue()
+    transfer_queue   = queue.Queue()
     return jsonify({"ok": True})
 
 
@@ -564,9 +555,7 @@ def start_transfer():
                 "selected_playlist_id", "selected_playlist_name"):
         if key in data:
             cfg[key] = data[key]
-    # Drain stale events in-place — do NOT replace transfer_queue with a new object.
-    # /stream holds a reference to the original queue; replacing it breaks the connection.
-    _drain_queue()
+    transfer_queue   = queue.Queue()
     transfer_running = True
     t = threading.Thread(target=run_transfer, args=(cfg, songs), daemon=True)
     t.start()
