@@ -90,17 +90,18 @@ def make_auth_manager(cfg):
     )
 
 
-def make_sp(cfg):
-    # If a pre-fetched access token was passed (set by /start_transfer in the main thread),
-    # use it directly so the worker thread never touches SpotifyOAuth or the .cache file.
-    # IMPORTANT: pass requests_session=False so spotipy creates a brand-new requests.Session
-    # inside the worker thread rather than inheriting a connection pool from the main thread.
-    # Inheriting the main thread's connection pool causes urllib3 to deadlock on SSL.
+def make_sp(cfg, new_session=False):
+    """Create a Spotify client.
+    new_session=True: create a brand-new requests.Session (use in worker threads to avoid
+    inheriting the main thread's urllib3 connection pool which causes SSL deadlocks).
+    """
+    import requests as _requests
+    session = _requests.Session() if new_session else True
     if cfg.get("_access_token"):
         return spotipy.Spotify(auth=cfg["_access_token"], requests_timeout=10, retries=3,
-                               requests_session=False)
+                               requests_session=session)
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg), requests_timeout=10, retries=3,
-                           requests_session=False)
+                           requests_session=session)
 
 
 def get_all_playlist_track_ids(sp, playlist_id):
@@ -227,7 +228,7 @@ def run_transfer(cfg, songs):
         print("[S2S] calling emit status...", flush=True)
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
         print("[S2S] emit done, calling make_sp...", flush=True)
-        sp = make_sp(cfg)
+        sp = make_sp(cfg, new_session=True)  # fresh session — avoids main-thread connection pool deadlock
         print("[S2S] make_sp done", flush=True)
         user_id      = cfg.get("_user_id", "")
         display_name = cfg.get("_user_display_name", "Spotify User")
