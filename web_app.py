@@ -216,8 +216,9 @@ def run_transfer(cfg, songs):
             playlist_url = existing["external_urls"]["spotify"]
             emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
         else:
-            playlist = sp.user_playlist_create(
-                user=user["id"], name=playlist_name, public=public,
+            # current_user_playlist_create uses /v1/me/playlists (modern endpoint)
+            playlist = sp.current_user_playlist_create(
+                name=playlist_name, public=public,
                 description="Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify"
             )
             playlist_id  = playlist["id"]
