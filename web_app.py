@@ -27,10 +27,11 @@ CONFIG_FILE   = os.path.join(os.path.dirname(__file__), "config.json")
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "library")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ── Global transfer state ─────────────────────────────────────────────────────
+# ── Global state ─────────────────────────────────────────────────────────────
 transfer_queue   = queue.Queue()
 transfer_running = False
 transfer_thread  = None
+shutdown_event   = threading.Event()   # set on Ctrl+C to unblock SSE streams
 
 
 # ── Config helpers ────────────────────────────────────────────────────────────
@@ -465,9 +466,9 @@ def start_transfer():
 @app.route("/stream")
 def stream():
     def generate():
-        while True:
+        while not shutdown_event.is_set():
             try:
-                item = transfer_queue.get(timeout=30)
+                item = transfer_queue.get(timeout=2)
                 yield f"data: {json.dumps(item)}\n\n"
                 if item.get("event") in ("done", "error"):
                     break
@@ -489,5 +490,14 @@ if __name__ == "__main__":
     print("\n" + "=" * 55)
     print("  Shazam2Spotify Web Interface")
     print("  Open your browser at: http://127.0.0.1:5000")
+    print("  Press Ctrl+C to stop")
     print("=" * 55 + "\n")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    try:
+        app.run(host="127.0.0.1", port=5000, debug=False,
+                use_reloader=False, threaded=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        shutdown_event.set()   # unblock any open SSE streams
+        print("\nShutting down... Bye!")
+        os._exit(0)
