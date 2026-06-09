@@ -214,14 +214,20 @@ def run_transfer(cfg, songs):
         transfer_queue.put({"event": event, "data": data})
 
     print(f"[S2S] run_transfer started: {len(songs)} songs", flush=True)
+    print(f"[S2S] _access_token present: {bool(cfg.get('_access_token'))}", flush=True)
+    print(f"[S2S] _user_id: {cfg.get('_user_id')}", flush=True)
     playlist_url = ""
     try:
         # Use pre-fetched token and user info from the main thread (no blocking calls here)
+        print("[S2S] calling emit status...", flush=True)
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
+        print("[S2S] emit done, calling make_sp...", flush=True)
         sp = make_sp(cfg)
+        print("[S2S] make_sp done", flush=True)
         user_id      = cfg.get("_user_id", "")
         display_name = cfg.get("_user_display_name", "Spotify User")
         emit("status", {"msg": f"Logged in as {display_name}", "type": "success"})
+        print(f"[S2S] logged in as {display_name}, user_id={user_id}", flush=True)
 
         playlist_name    = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
         selected_pl_id   = cfg.get("selected_playlist_id", "")   # set when user picks from dropdown
@@ -264,12 +270,15 @@ def run_transfer(cfg, songs):
         emit("playlist", {"url": playlist_url})
 
         # Fetch existing tracks to skip already-added songs.
+        print(f"[S2S] is_new_playlist={is_new_playlist} sync_mode={sync_mode} playlist_id={playlist_id}", flush=True)
         if is_new_playlist:
             existing_ids = set()
             emit("status", {"msg": "New playlist — no duplicate check needed", "type": "info"})
         elif sync_mode:
             emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
+            print("[S2S] calling get_all_playlist_track_ids...", flush=True)
             existing_ids = get_all_playlist_track_ids(sp, playlist_id)
+            print(f"[S2S] existing_ids count: {len(existing_ids)}", flush=True)
             emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist — will skip these", "type": "info"})
         else:
             existing_ids = set()
@@ -279,6 +288,7 @@ def run_transfer(cfg, songs):
         added = skipped = csv_dupes = 0
         not_found = []
         all_results = []  # full log: (original_title, original_artist, matched_title, matched_artist, status)
+        print(f"[S2S] starting song loop: {total} songs", flush=True)
 
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
