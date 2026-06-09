@@ -22,12 +22,14 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 # Clear any spotipy environment variables that could override config.json.
-for _env in ("SPOTIPY_CLIENT_ID", "SPOTIPY_CLIENT_SECRET",
-             "SPOTIPY_REDIRECT_URI", "SPOTIPY_CLIENT_USERNAME"):
+# spotipy falls back to these env vars when the passed value is empty/None,
+# which caused the wrong client_id and redirect_uri to be used.
+for _env in ("SPOTIPY_CLIENT_ID", "SPOTIPY_CLIENT_SECRET", "SPOTIPY_REDIRECT_URI",
+             "SPOTIPY_CLIENT_USERNAME"):
     os.environ.pop(_env, None)
 
 app = Flask(__name__)
-app.secret_key = "shazam2spotify-static-key-2024"
+app.secret_key = "shazam2spotify-static-key-2024"   # static so sessions survive restarts
 
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE   = os.path.join(BASE_DIR, "config.json")
@@ -40,6 +42,7 @@ transfer_queue   = queue.Queue()
 transfer_running = False
 transfer_thread  = None
 shutdown_event   = threading.Event()
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -62,7 +65,8 @@ def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                cfg.update(json.load(f))
+                saved = json.load(f)
+            cfg.update(saved)
         except Exception:
             pass
     return cfg
@@ -80,10 +84,7 @@ def make_auth_manager(cfg):
         client_id=cfg["client_id"],
         client_secret=cfg["client_secret"],
         redirect_uri=cfg["redirect_uri"],
-        scope=(
-            "playlist-read-private playlist-read-collaborative "
-            "playlist-modify-public playlist-modify-private"
-        ),
+        scope="playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private",
         cache_path=CACHE_FILE,
         open_browser=False,
     )
@@ -93,18 +94,18 @@ def make_sp(cfg):
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
 
 
-def get_playlist_track_ids(sp, playlist_id):
-    """Fetch all track IDs currently in a playlist (handles pagination)."""
+def get_all_playlist_track_ids(sp, playlist_id):
+    # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     ids = set()
     offset = 0
     while True:
-        # /playlists/{id}/items replaces the deprecated /playlists/{id}/tracks
-        results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
-        for item in (results.get("items") or []):
-            if not item:
-                continue
-            # The track object may be under "track" (old) or "item" (Feb 2026 rename)
-            track = item.get("track") or item.get("item")
+        results = sp._get(
+            f"playlists/{playlist_id}/items",
+            limit=100, offset=offset
+        )
+        for item in results.get("items", []):
+            # Feb 2026: field renamed from 'track' to 'item'
+            track = item.get("track") or item.get("item") if item else None
             if track and track.get("id"):
                 ids.add(track["id"])
         if results.get("next"):
@@ -114,13 +115,13 @@ def get_playlist_track_ids(sp, playlist_id):
     return ids
 
 
-def find_playlist_by_name(sp, user_id, name):
-    """Return the first playlist owned by user_id with the given name, or None."""
+def find_existing_playlist(sp, user_id, name):
+    # Direct call to /v1/me/playlists — works on all spotipy versions
     offset = 0
     while True:
         results = sp._get("me/playlists", limit=50, offset=offset)
-        for pl in (results.get("items") or []):
-            if pl and pl.get("owner", {}).get("id") == user_id and pl.get("name") == name:
+        for pl in results["items"]:
+            if pl["owner"]["id"] == user_id and pl["name"] == name:
                 return pl
         if results.get("next"):
             offset += 50
@@ -129,28 +130,15 @@ def find_playlist_by_name(sp, user_id, name):
     return None
 
 
-def create_playlist(sp, user_id, name, public):
-    """Create a new playlist and return it."""
-    return sp._post(
-        "me/playlists",
-        payload={
-            "name": name,
-            "public": public,
-            "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
-        }
-    )
-
-
-def remove_duplicates_from_playlist(sp, playlist_id):
-    """Remove duplicate tracks from a playlist. Returns count removed."""
+def remove_playlist_duplicates(sp, playlist_id):
+    # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     items = []
     offset = 0
     while True:
         results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
-        for item in (results.get("items") or []):
-            if not item:
-                continue
-            track = item.get("track") or item.get("item")
+        for item in results.get("items", []):
+            # Feb 2026: field renamed from 'track' to 'item'
+            track = item.get("track") or item.get("item") if item else None
             if track and track.get("id"):
                 items.append({"id": track["id"], "uri": track["uri"]})
         if results.get("next"):
@@ -159,17 +147,18 @@ def remove_duplicates_from_playlist(sp, playlist_id):
             break
 
     seen = set()
-    to_remove = {}  # uri -> list of positions
+    uri_positions = {}
     for pos, item in enumerate(items):
         tid = item["id"]
         if tid in seen:
-            to_remove.setdefault(item["uri"], []).append(pos)
+            uri_positions.setdefault(item["uri"], []).append(pos)
         else:
             seen.add(tid)
 
     removed = 0
-    for uri, positions in to_remove.items():
+    for uri, positions in uri_positions.items():
         for pos in sorted(positions, reverse=True):
+            # Use /items endpoint for DELETE too
             sp._delete(
                 f"playlists/{playlist_id}/items",
                 payload={"items": [{"uri": uri, "positions": [pos]}]}
@@ -181,9 +170,9 @@ def remove_duplicates_from_playlist(sp, playlist_id):
 
 # ── CSV parser ────────────────────────────────────────────────────────────────
 
-def parse_shazam_csv(content):
+def parse_shazam_csv(file_content):
     songs = []
-    reader = csv.reader(io.StringIO(content))
+    reader = csv.reader(io.StringIO(file_content))
     header_done = False
     for row in reader:
         if not header_done:
@@ -215,63 +204,52 @@ def run_transfer(cfg, songs):
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
         sp   = make_sp(cfg)
         user = sp.current_user()
-        user_id      = user["id"]
-        display_name = user.get("display_name") or user_id
-        emit("status", {"msg": f"Logged in as {display_name}", "type": "success"})
+        emit("status", {"msg": f"Logged in as {user['display_name']}", "type": "success"})
 
-        # Settings
         playlist_name    = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
         selected_pl_id   = cfg.get("selected_playlist_id", "")
         selected_pl_name = cfg.get("selected_playlist_name", "")
-        public           = bool(cfg.get("public_playlist", True))
-        sync_mode        = bool(cfg.get("sync_mode", True))
-        remove_dupes     = bool(cfg.get("remove_duplicates", False))
-        skip_dupes       = bool(cfg.get("skip_duplicates", True))
-        delay            = max(0.1, int(cfg.get("delay_ms", 500)) / 1000.0)
-        is_new_playlist  = False
-
-        # Resolve destination playlist
+        public        = cfg.get("public_playlist", True)
+        sync_mode     = cfg.get("sync_mode", True)
+        remove_dupes  = cfg.get("remove_duplicates", False)
+        skip_dupes    = cfg.get("skip_duplicates", True)
+        delay         = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
+        is_new_playlist = False
         if selected_pl_id:
             # User picked an existing playlist from the dropdown
             playlist_id  = selected_pl_id
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-            emit("status", {
-                "msg": f"Using playlist '{selected_pl_name or playlist_id}'",
-                "type": "info"
-            })
+            emit("status", {"msg": f"Using playlist '{selected_pl_name or playlist_id}'", "type": "info"})
         else:
-            # Find or create by name
-            existing = find_playlist_by_name(sp, user_id, playlist_name) if sync_mode else None
+            # Find or create playlist by name
+            existing = find_existing_playlist(sp, user["id"], playlist_name) if sync_mode else None
             if existing:
                 playlist_id  = existing["id"]
                 playlist_url = existing["external_urls"]["spotify"]
-                emit("status", {
-                    "msg": f"Found '{playlist_name}' — syncing new songs only",
-                    "type": "info"
-                })
+                emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
             else:
-                pl = create_playlist(sp, user_id, playlist_name, public)
-                playlist_id     = pl["id"]
-                playlist_url    = f"https://open.spotify.com/playlist/{playlist_id}"
+                playlist = sp._post(
+                    "me/playlists",
+                    payload={
+                        "name": playlist_name,
+                        "public": public,
+                        "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
+                    }
+                )
+                playlist_id  = playlist["id"]
+                playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
                 is_new_playlist = True
-                emit("status", {
-                    "msg": f"Created new playlist '{playlist_name}'",
-                    "type": "success"
-                })
-
+                emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
-        # Fetch existing track IDs (skip for brand-new playlists)
+        # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
         if is_new_playlist:
             existing_ids = set()
-            emit("status", {"msg": "New playlist — no duplicate check needed", "type": "info"})
+            emit("status", {"msg": "New playlist — skipping duplicate check", "type": "info"})
         else:
             emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
-            existing_ids = get_playlist_track_ids(sp, playlist_id)
-            emit("status", {
-                "msg": f"{len(existing_ids)} track(s) already in playlist — will skip these",
-                "type": "info"
-            })
+            existing_ids = get_all_playlist_track_ids(sp, playlist_id)
+            emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
 
         total       = len(songs)
         session_ids = set()
@@ -282,82 +260,53 @@ def run_transfer(cfg, songs):
             if shutdown_event.is_set():
                 break
             try:
-                results = sp.search(
-                    q=f"track:{title} artist:{artist}",
-                    type="track",
-                    limit=1
-                )
-                tracks = results["tracks"]["items"]
+                results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)
+                tracks  = results["tracks"]["items"]
                 if tracks:
                     tid     = tracks[0]["id"]
                     tname   = tracks[0]["name"]
                     tartist = tracks[0]["artists"][0]["name"]
-
                     if tid in existing_ids:
                         skipped += 1
-                        emit("song", {
-                            "i": i, "total": total, "status": "skipped",
-                            "title": tname, "artist": tartist,
-                            "msg": "Already in playlist"
-                        })
+                        emit("song", {"i": i, "total": total, "status": "skipped",
+                                      "title": tname, "artist": tartist, "msg": "Already in playlist"})
                     elif skip_dupes and tid in session_ids:
                         csv_dupes += 1
-                        emit("song", {
-                            "i": i, "total": total, "status": "duplicate",
-                            "title": tname, "artist": tartist,
-                            "msg": "Duplicate in CSV"
-                        })
+                        emit("song", {"i": i, "total": total, "status": "duplicate",
+                                      "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
-                        sp._post(
-                            f"playlists/{playlist_id}/items",
-                            payload={"uris": [f"spotify:track:{tid}"]}
-                        )
+                        # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
+                        sp._post(f"playlists/{playlist_id}/items", payload={"uris": [f"spotify:track:{tid}"]})
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
-                        emit("song", {
-                            "i": i, "total": total, "status": "added",
-                            "title": tname, "artist": tartist,
-                            "msg": "Added"
-                        })
+                        emit("song", {"i": i, "total": total, "status": "added",
+                                      "title": tname, "artist": tartist, "msg": "Added"})
                 else:
                     not_found.append(f"{title} — {artist}")
-                    emit("song", {
-                        "i": i, "total": total, "status": "notfound",
-                        "title": title, "artist": artist,
-                        "msg": "Not found on Spotify"
-                    })
+                    emit("song", {"i": i, "total": total, "status": "notfound",
+                                  "title": title, "artist": artist, "msg": "Not found on Spotify"})
                 time.sleep(delay)
             except Exception as e:
-                emit("song", {
-                    "i": i, "total": total, "status": "error",
-                    "title": title, "artist": artist,
-                    "msg": str(e)
-                })
+                emit("song", {"i": i, "total": total, "status": "error",
+                              "title": title, "artist": artist, "msg": str(e)})
                 time.sleep(1)
 
-        # Optional: remove duplicates pass
+        # Remove duplicates pass
         dupes_removed = 0
         if remove_dupes and not shutdown_event.is_set():
             emit("status", {"msg": "Scanning for duplicates to remove...", "type": "info"})
             try:
-                dupes_removed = remove_duplicates_from_playlist(sp, playlist_id)
-                emit("status", {
-                    "msg": f"Removed {dupes_removed} duplicate(s)",
-                    "type": "success"
-                })
+                dupes_removed = remove_playlist_duplicates(sp, playlist_id)
+                emit("status", {"msg": f"Removed {dupes_removed} duplicate(s)", "type": "success"})
             except Exception as e:
                 emit("status", {"msg": f"Duplicate removal error: {e}", "type": "error"})
 
         emit("done", {
-            "total": total,
-            "added": added,
-            "skipped": skipped,
-            "csv_dupes": csv_dupes,
-            "dupes_removed": dupes_removed,
-            "not_found": not_found,
-            "playlist_url": playlist_url,
-            "open_browser": bool(cfg.get("open_browser", True)),
+            "total": total, "added": added, "skipped": skipped,
+            "csv_dupes": csv_dupes, "dupes_removed": dupes_removed,
+            "not_found": not_found, "playlist_url": playlist_url,
+            "open_browser": cfg.get("open_browser", True),
         })
 
     except Exception as e:
@@ -375,7 +324,8 @@ def index():
     if os.path.exists(CACHE_FILE) and cfg.get("client_id"):
         try:
             sp = make_sp(cfg)
-            sp_authenticated = bool(sp.current_user())
+            user = sp.current_user()
+            sp_authenticated = bool(user)
         except Exception:
             sp_authenticated = False
     return render_template("index.html", cfg=cfg, sp_authenticated=sp_authenticated)
@@ -387,10 +337,12 @@ def save_config_route():
     old_cfg = load_config()
     new_id  = data.get("client_id", old_cfg["client_id"]).strip()
     new_uri = data.get("redirect_uri", old_cfg["redirect_uri"]).strip()
-    # Wipe stale cache if credentials changed
+
+    # If credentials changed, wipe the stale .cache so spotipy doesn't reuse old tokens
     if new_id != old_cfg["client_id"] or new_uri != old_cfg["redirect_uri"]:
         if os.path.exists(CACHE_FILE):
             os.remove(CACHE_FILE)
+
     old_cfg.update({
         "client_id":         new_id,
         "client_secret":     data.get("client_secret", old_cfg["client_secret"]).strip(),
@@ -441,43 +393,68 @@ def check_auth():
     if not os.path.exists(CACHE_FILE) or not cfg.get("client_id"):
         return jsonify({"authenticated": False})
     try:
-        user = make_sp(cfg).current_user()
+        sp   = make_sp(cfg)
+        user = sp.current_user()
         return jsonify({"authenticated": True, "name": user.get("display_name", "Unknown")})
     except Exception:
         return jsonify({"authenticated": False})
 
 
-@app.route("/get_playlists")
-def get_playlists():
-    """Return all user playlists with correct track counts for the dropdown."""
+@app.route("/test_add_track")
+def test_add_track():
+    """Debug: try adding a known track to the first playlist found, return full Spotify response."""
+    import requests as req
     cfg = load_config()
     try:
-        sp = make_sp(cfg)
-        playlists = []
-        offset = 0
-        while True:
-            results = sp._get("me/playlists", limit=50, offset=offset)
-            for pl in (results.get("items") or []):
-                if not pl:
-                    continue
-                # The playlist list endpoint returns tracks.total (not items.total).
-                # This is a different endpoint from the Feb 2026 /items change —
-                # the list endpoint still uses the "tracks" key for the count object.
-                total = 0
-                if pl.get("tracks") and isinstance(pl["tracks"], dict):
-                    total = pl["tracks"].get("total", 0) or 0
-                playlists.append({
-                    "id":    pl["id"],
-                    "name":  pl["name"],
-                    "total": total,
-                })
-            if results.get("next"):
-                offset += 50
-            else:
-                break
-        return jsonify({"ok": True, "playlists": playlists})
+        sp   = make_sp(cfg)
+        auth = make_auth_manager(cfg)
+        token = auth.get_cached_token()
+        access_token = token["access_token"]
+
+        # Get first playlist
+        playlists = sp._get("me/playlists", limit=1)
+        if not playlists["items"]:
+            return jsonify({"error": "No playlists found"})
+        pl_id = playlists["items"][0]["id"]
+        pl_name = playlists["items"][0]["name"]
+
+        # Try adding a well-known track (Never Gonna Give You Up)
+        # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
+        test_uri = "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+        url = f"https://api.spotify.com/v1/playlists/{pl_id}/items"
+        resp = req.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"uris": [test_uri]}
+        )
+        return jsonify({
+            "playlist": pl_name,
+            "playlist_id": pl_id,
+            "status_code": resp.status_code,
+            "response": resp.json() if resp.content else "(empty)"
+        })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)})
+
+
+@app.route("/token_info")
+def token_info():
+    """Debug route: shows what scopes the current cached token has."""
+    cfg = load_config()
+    if not os.path.exists(CACHE_FILE):
+        return jsonify({"error": "No .cache file found — not authenticated yet"})
+    try:
+        auth = make_auth_manager(cfg)
+        token = auth.get_cached_token()
+        if not token:
+            return jsonify({"error": "No cached token"})
+        return jsonify({
+            "scope": token.get("scope", "(none)"),
+            "expires_at": token.get("expires_at"),
+            "token_type": token.get("token_type"),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 
 @app.route("/upload_csv", methods=["POST"])
@@ -498,15 +475,6 @@ def upload_csv():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/reset_transfer", methods=["POST"])
-def reset_transfer():
-    """Clear any stuck transfer state (called on page load and New Transfer)."""
-    global transfer_running, transfer_queue
-    transfer_running = False
-    transfer_queue   = queue.Queue()
-    return jsonify({"ok": True})
-
-
 @app.route("/start_transfer", methods=["POST"])
 def start_transfer():
     global transfer_running, transfer_thread, transfer_queue
@@ -518,6 +486,7 @@ def start_transfer():
     if not songs:
         return jsonify({"error": "No songs to transfer"}), 400
     cfg = load_config()
+    # Override with values sent from UI
     for key in ("playlist_name", "open_browser", "public_playlist",
                 "skip_duplicates", "remove_duplicates", "sync_mode", "delay_ms",
                 "selected_playlist_id", "selected_playlist_name"):
@@ -525,8 +494,8 @@ def start_transfer():
             cfg[key] = data[key]
     transfer_queue   = queue.Queue()
     transfer_running = True
-    transfer_thread  = threading.Thread(target=run_transfer, args=(cfg, songs), daemon=True)
-    transfer_thread.start()
+    t = threading.Thread(target=run_transfer, args=(cfg, songs), daemon=True)
+    t.start()
     return jsonify({"ok": True})
 
 
@@ -548,6 +517,38 @@ def stream():
     )
 
 
+@app.route("/get_playlists")
+def get_playlists():
+    """Return all user playlists for the dropdown."""
+    cfg = load_config()
+    try:
+        sp = make_sp(cfg)
+        playlists = []
+        offset = 0
+        while True:
+            results = sp._get("me/playlists", limit=50, offset=offset)
+            for pl in (results.get("items") or []):
+                if pl:
+                    total = (pl.get("items") or {}).get("total") or (pl.get("tracks") or {}).get("total") or 0
+                    playlists.append({"id": pl["id"], "name": pl["name"], "total": total})
+            if results.get("next"):
+                offset += 50
+            else:
+                break
+        return jsonify({"ok": True, "playlists": playlists})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/reset_transfer", methods=["POST"])
+def reset_transfer():
+    """Force-reset transfer state so a new transfer can start after a page reload."""
+    global transfer_running, transfer_queue
+    transfer_running = False
+    transfer_queue   = queue.Queue()
+    return jsonify({"ok": True})
+
+
 @app.route("/logout")
 def logout():
     if os.path.exists(CACHE_FILE):
@@ -558,9 +559,10 @@ def logout():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Ensure config.json exists on disk before starting
     if not os.path.exists(CONFIG_FILE):
         write_config(dict(DEFAULTS))
-        print("  Created config.json — fill in your Client ID and Secret.")
+        print(f"  Created config.json — fill in your Client ID and Secret.")
 
     print("\n" + "=" * 55)
     print("  Shazam2Spotify Web Interface")
@@ -568,10 +570,12 @@ if __name__ == "__main__":
     print("  Press Ctrl+C to stop")
     print("=" * 55 + "\n")
 
+    # Use waitress (production WSGI server) — handles Ctrl+C cleanly
     try:
         from waitress import serve
         serve(app, host="127.0.0.1", port=5000, threads=8)
     except ImportError:
+        # Fallback to Flask dev server if waitress not installed
         try:
             app.run(host="127.0.0.1", port=5000, debug=False,
                     use_reloader=False, threaded=True)
