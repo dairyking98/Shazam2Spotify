@@ -8,7 +8,7 @@ SETUP INSTRUCTIONS
 1. Get your Spotify API credentials:
    - Go to https://developer.spotify.com/dashboard
    - Log in and click "Create App"
-   - Fill in any name/description, set Redirect URI to: http://127.0.0.1:8888/callback
+   - Fill in any name/description, set Redirect URI to: http://127.0.0.1:5000/callback
      (Note: Spotify no longer allows 'localhost' — use the IP 127.0.0.1 instead)
    - Copy your Client ID and Client Secret
 
@@ -51,7 +51,7 @@ except ImportError:
 
 CLIENT_ID     = os.environ.get("SPOTIPY_CLIENT_ID",     "YOUR_CLIENT_ID_HERE")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET_HERE")
-REDIRECT_URI  = os.environ.get("SPOTIPY_REDIRECT_URI",  "http://127.0.0.1:8888/callback")
+REDIRECT_URI  = os.environ.get("SPOTIPY_REDIRECT_URI",  "http://127.0.0.1:5000/callback")
 
 # ──────────────────────────────────────────────────────────────────────────────
 

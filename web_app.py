@@ -362,7 +362,7 @@ def save_config_route():
     cfg.update({
         "client_id":         data.get("client_id", "").strip(),
         "client_secret":     data.get("client_secret", "").strip(),
-        "redirect_uri":      data.get("redirect_uri", "http://127.0.0.1:8888/callback").strip(),
+        "redirect_uri":      data.get("redirect_uri", "http://127.0.0.1:5000/callback").strip(),
         "playlist_name":     data.get("playlist_name", "Shazam2Spotify").strip(),
         "open_browser":      bool(data.get("open_browser", True)),
         "public_playlist":   bool(data.get("public_playlist", True)),
