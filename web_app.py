@@ -213,15 +213,21 @@ def run_transfer(cfg, songs):
         skip_dupes    = cfg.get("skip_duplicates", True)
         delay         = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
 
-        # Find or create playlist
-        existing = find_existing_playlist(sp, user["id"], playlist_name) if sync_mode else None
+        # Always search for existing playlist by name first to avoid creating duplicates.
+        # sync_mode controls whether already-added songs are skipped, but we always
+        # reuse an existing playlist rather than creating a second one with the same name.
+        emit("status", {"msg": f"Searching for existing playlist '{playlist_name}'...", "type": "info"})
+        existing = find_existing_playlist(sp, user["id"], playlist_name)
         is_new_playlist = False
         if existing:
             playlist_id  = existing["id"]
             playlist_url = existing["external_urls"]["spotify"]
-            emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
+            if sync_mode:
+                emit("status", {"msg": f"Found '{playlist_name}' — will only add new songs", "type": "info"})
+            else:
+                emit("status", {"msg": f"Found '{playlist_name}' — adding all songs (sync off)", "type": "info"})
         else:
-            # Use direct API call to /v1/me/playlists — works on all spotipy versions
+            # No existing playlist found — create a fresh one
             playlist = sp._post(
                 "me/playlists",
                 payload={
@@ -236,14 +242,18 @@ def run_transfer(cfg, songs):
             emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
-        # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
+        # Fetch existing tracks to skip already-added songs.
+        # Always do this when syncing to an existing playlist; skip only for brand-new ones.
         if is_new_playlist:
             existing_ids = set()
-            emit("status", {"msg": "New playlist — skipping duplicate check", "type": "info"})
-        else:
+            emit("status", {"msg": "New playlist — no duplicate check needed", "type": "info"})
+        elif sync_mode:
             emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
             existing_ids = get_all_playlist_track_ids(sp, playlist_id)
-            emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
+            emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist — will skip these", "type": "info"})
+        else:
+            # sync_mode off but playlist exists — still fetch so skip_duplicates works correctly
+            existing_ids = set()
 
         total       = len(songs)
         session_ids = set()
