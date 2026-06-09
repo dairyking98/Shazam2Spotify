@@ -84,7 +84,7 @@ def make_auth_manager(cfg):
         client_id=cfg["client_id"],
         client_secret=cfg["client_secret"],
         redirect_uri=cfg["redirect_uri"],
-        scope="playlist-modify-public playlist-modify-private",
+        scope="playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private",
         cache_path=CACHE_FILE,
         open_browser=False,
     )
