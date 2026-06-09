@@ -93,9 +93,14 @@ def make_auth_manager(cfg):
 def make_sp(cfg):
     # If a pre-fetched access token was passed (set by /start_transfer in the main thread),
     # use it directly so the worker thread never touches SpotifyOAuth or the .cache file.
+    # IMPORTANT: pass requests_session=False so spotipy creates a brand-new requests.Session
+    # inside the worker thread rather than inheriting a connection pool from the main thread.
+    # Inheriting the main thread's connection pool causes urllib3 to deadlock on SSL.
     if cfg.get("_access_token"):
-        return spotipy.Spotify(auth=cfg["_access_token"], requests_timeout=10, retries=3)
-    return spotipy.Spotify(auth_manager=make_auth_manager(cfg), requests_timeout=10, retries=3)
+        return spotipy.Spotify(auth=cfg["_access_token"], requests_timeout=10, retries=3,
+                               requests_session=False)
+    return spotipy.Spotify(auth_manager=make_auth_manager(cfg), requests_timeout=10, retries=3,
+                           requests_session=False)
 
 
 def get_all_playlist_track_ids(sp, playlist_id):
