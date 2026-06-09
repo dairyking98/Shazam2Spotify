@@ -850,7 +850,9 @@
   }
 
   function handleStreamEvent(e) {
-    const msg = JSON.parse(e.data);
+    console.log('[S2S] SSE raw message:', e.data);
+    let msg;
+    try { msg = JSON.parse(e.data); } catch(err) { console.error('[S2S] JSON parse error:', err, e.data); return; }
     if (msg.event === 'ping') return;
 
     if (msg.event === 'status') {
