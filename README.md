@@ -44,7 +44,8 @@ pip install -r requirements.txt
 2. Log in with your Spotify account
 3. Click **"Create App"**
 4. Fill in any name and description
-5. Set the **Redirect URI** to exactly: `http://localhost:8888/callback`
+5. Set the **Redirect URI** to exactly: `http://127.0.0.1:8888/callback`
+   > ⚠️ **Important:** Spotify no longer accepts `localhost` as of April 2025. Use the explicit IP `127.0.0.1` instead — it works the same way but is accepted by the dashboard.
 6. Click **Save**, then open your app and copy the **Client ID** and **Client Secret**
 
 ### Step 2: Configure Your Credentials
@@ -54,7 +55,7 @@ Open `shazam2spotify.py` and fill in your credentials near the top of the file:
 ```python
 CLIENT_ID     = "your_client_id_here"
 CLIENT_SECRET = "your_client_secret_here"
-REDIRECT_URI  = "http://localhost:8888/callback"
+REDIRECT_URI  = "http://127.0.0.1:8888/callback"
 ```
 
 Alternatively, you can use **environment variables** (recommended for security):
@@ -63,12 +64,12 @@ Alternatively, you can use **environment variables** (recommended for security):
 # Linux / macOS
 export SPOTIPY_CLIENT_ID="your_client_id"
 export SPOTIPY_CLIENT_SECRET="your_client_secret"
-export SPOTIPY_REDIRECT_URI="http://localhost:8888/callback"
+export SPOTIPY_REDIRECT_URI="http://127.0.0.1:8888/callback"
 
 # Windows (Command Prompt)
 set SPOTIPY_CLIENT_ID=your_client_id
 set SPOTIPY_CLIENT_SECRET=your_client_secret
-set SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
+set SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
 ```
 
 ### Step 3: Export Your Shazam Library
@@ -100,7 +101,7 @@ python shazam2spotify.py --no-browser
 
 ### First Run — Authentication
 
-The first time you run the script, a browser window will open asking you to log in to Spotify and authorize the app. After authorizing, you will be redirected to `http://localhost:8888/callback` — the script will capture this automatically and save a `.cache` file so you won't need to log in again.
+The first time you run the script, a browser window will open asking you to log in to Spotify and authorize the app. After authorizing, you will be redirected to `http://127.0.0.1:8888/callback` — the script will capture this automatically and save a `.cache` file so you won't need to log in again.
 
 ### Example Output
 
@@ -148,7 +149,7 @@ The first time you run the script, a browser window will open asking you to log 
 → Make sure your Shazam export is in the `library/` folder, or pass `--csv /path/to/file`.
 
 **"INVALID_CLIENT: Invalid redirect URI"**
-→ Make sure `http://localhost:8888/callback` is added as a Redirect URI in your Spotify app settings at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
+→ Make sure `http://127.0.0.1:8888/callback` is added as a Redirect URI in your Spotify app settings at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
 
 **Songs not found**
 → Some songs in your Shazam library may not be available on Spotify, or the search query may not match exactly. The script will list all not-found songs at the end.
