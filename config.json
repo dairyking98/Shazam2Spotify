@@ -1,0 +1,12 @@
+{
+  "client_id": "",
+  "client_secret": "",
+  "redirect_uri": "http://127.0.0.1:5000/callback",
+  "playlist_name": "Shazam2Spotify",
+  "open_browser": true,
+  "public_playlist": true,
+  "skip_duplicates": true,
+  "remove_duplicates": false,
+  "sync_mode": true,
+  "delay_ms": 500
+}
