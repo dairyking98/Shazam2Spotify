@@ -93,6 +93,16 @@ def make_sp(cfg):
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
 
 
+def make_sp_with_token(token):
+    """Create a Spotify client using a raw access token and a fresh requests.Session.
+    This avoids the Windows urllib3 connection-pool deadlock that occurs when
+    spotipy's SpotifyOAuth session (created in the main thread) is reused in a
+    worker thread.  A brand-new session is created here, inside the worker."""
+    import requests as _requests
+    sess = _requests.Session()
+    return spotipy.Spotify(auth=token, requests_session=sess)
+
+
 def get_playlist_track_ids(sp, playlist_id):
     """Fetch all track IDs currently in a playlist (handles pagination)."""
     ids = set()
@@ -211,21 +221,25 @@ def run_transfer(cfg, songs):
         print(f"[S2S EMIT] event={event} data={data}", flush=True)
         transfer_queue.put({"event": event, "data": data})
 
-    print(f"[S2S] run_transfer START — {len(songs)} songs, transfer_running={transfer_running}", flush=True)
-    print(f"[S2S] cfg keys: {list(cfg.keys())}", flush=True)
+    print(f"[S2S] run_transfer START — {len(songs)} songs", flush=True)
     print(f"[S2S] selected_playlist_id={cfg.get('selected_playlist_id')!r}", flush=True)
-    print(f"[S2S] playlist_name={cfg.get('playlist_name')!r}", flush=True)
+    print(f"[S2S] _access_token present: {bool(cfg.get('_access_token'))}", flush=True)
     playlist_url = ""
     try:
-        print("[S2S] calling emit(status, Connecting...)", flush=True)
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
-        print("[S2S] calling make_sp...", flush=True)
-        sp   = make_sp(cfg)
-        print("[S2S] make_sp done, calling current_user...", flush=True)
-        user = sp.current_user()
-        user_id      = user["id"]
-        display_name = user.get("display_name") or user_id
-        print(f"[S2S] logged in as {display_name} ({user_id})", flush=True)
+
+        # Use pre-fetched token + fresh session to avoid Windows urllib3 deadlock
+        access_token = cfg.get("_access_token")
+        if not access_token:
+            raise RuntimeError("No access token — please re-authenticate with Spotify")
+        print("[S2S] creating sp with fresh session...", flush=True)
+        sp = make_sp_with_token(access_token)
+        print("[S2S] sp created", flush=True)
+
+        # Use pre-fetched user info (no network call needed in worker)
+        user_id      = cfg.get("_user_id", "")
+        display_name = cfg.get("_display_name", user_id)
+        print(f"[S2S] user: {display_name} ({user_id})", flush=True)
         emit("status", {"msg": f"Logged in as {display_name}", "type": "success"})
 
         # Settings
@@ -549,6 +563,30 @@ def start_transfer():
                 "selected_playlist_id", "selected_playlist_name"):
         if key in data:
             cfg[key] = data[key]
+
+    # Pre-fetch the access token and user info in the main Flask thread.
+    # This avoids the Windows urllib3 connection-pool deadlock: spotipy's
+    # SpotifyOAuth holds a requests.Session tied to the main thread's SSL
+    # context; reusing it in a daemon thread causes sp.search() to hang.
+    # By fetching the token here and passing it to the worker, the worker
+    # creates its own fresh session and never touches SpotifyOAuth.
+    try:
+        auth_manager = make_auth_manager(cfg)
+        token_info   = auth_manager.get_cached_token()
+        if not token_info:
+            return jsonify({"error": "Not authenticated with Spotify"}), 401
+        if auth_manager.is_token_expired(token_info):
+            token_info = auth_manager.refresh_access_token(token_info["refresh_token"])
+        access_token = token_info["access_token"]
+        # Also fetch user info in the main thread so the worker never needs to.
+        sp_main = make_sp(cfg)
+        user     = sp_main.current_user()
+        cfg["_access_token"]    = access_token
+        cfg["_user_id"]         = user["id"]
+        cfg["_display_name"]    = user.get("display_name") or user["id"]
+    except Exception as e:
+        return jsonify({"error": f"Spotify auth error: {e}"}), 500
+
     transfer_queue   = queue.Queue()
     transfer_running = True
     transfer_thread  = threading.Thread(target=run_transfer, args=(cfg, songs), daemon=True)
