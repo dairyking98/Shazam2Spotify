@@ -209,13 +209,13 @@ def run_transfer(cfg, songs):
 
         # Find or create playlist
         existing = find_existing_playlist(sp, user["id"], playlist_name) if sync_mode else None
+        is_new_playlist = False
         if existing:
             playlist_id  = existing["id"]
             playlist_url = existing["external_urls"]["spotify"]
             emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
         else:
             # Use direct API call to /v1/me/playlists — works on all spotipy versions
-            # (current_user_playlist_create only exists in newer spotipy builds)
             playlist = sp._post(
                 "me/playlists",
                 payload={
@@ -226,13 +226,18 @@ def run_transfer(cfg, songs):
             )
             playlist_id  = playlist["id"]
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+            is_new_playlist = True
             emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
-        # Fetch existing tracks
-        emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
-        existing_ids = get_all_playlist_track_ids(sp, playlist_id)
-        emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
+        # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
+        if is_new_playlist:
+            existing_ids = set()
+            emit("status", {"msg": "New playlist — skipping duplicate check", "type": "info"})
+        else:
+            emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
+            existing_ids = get_all_playlist_track_ids(sp, playlist_id)
+            emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
 
         total       = len(songs)
         session_ids = set()
