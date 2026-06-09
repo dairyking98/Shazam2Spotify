@@ -133,7 +133,11 @@ def find_existing_playlist(sp, user_id, name):
     if not matches:
         return None
     # Pick the playlist with the highest track count
-    return max(matches, key=lambda p: p.get("tracks", {}).get("total", 0))
+    # Feb 2026: 'tracks' renamed to 'items' in playlist objects
+    def _track_count(p):
+        obj = p.get("items") or p.get("tracks") or {}
+        return obj.get("total", 0)
+    return max(matches, key=_track_count)
 
 
 def remove_playlist_duplicates(sp, playlist_id):
@@ -273,7 +277,7 @@ def run_transfer(cfg, songs):
             if shutdown_event.is_set():
                 break
             try:
-                results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)
+                results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)  # noqa: limit=1 is within the new max of 10
                 tracks  = results["tracks"]["items"]
                 if tracks:
                     tid     = tracks[0]["id"]
@@ -516,6 +520,16 @@ def upload_csv():
         return jsonify({"ok": True, "count": len(songs)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/reset_transfer", methods=["POST"])
+def reset_transfer():
+    """Force-reset the transfer state so a new transfer can start.
+    Called automatically by the UI when the page loads or 'New Transfer' is clicked."""
+    global transfer_running, transfer_queue
+    transfer_running = False
+    transfer_queue   = queue.Queue()
+    return jsonify({"ok": True})
 
 
 @app.route("/start_transfer", methods=["POST"])

@@ -521,6 +521,8 @@
   document.addEventListener('DOMContentLoaded', () => {
     setupDragDrop();
     updateStartButton();
+    // Reset any stuck transfer state from a previous run / page reload
+    fetch('/reset_transfer', {method:'POST'}).catch(() => {});
     {% if request.args.get('auth') == 'success' %}
     checkAuth();
     loadPlaylists();
@@ -593,11 +595,13 @@
 
   // ── Config ─────────────────────────────────────────────────────────────────
   async function saveConfig() {
+    // playlist_name input may be hidden (existing-playlist mode) — read safely
+    const plNameEl = document.getElementById('playlist_name');
     const data = {
       client_id:        document.getElementById('client_id').value.trim(),
       client_secret:    document.getElementById('client_secret').value.trim(),
       redirect_uri:     document.getElementById('redirect_uri').value.trim(),
-      playlist_name:    document.getElementById('playlist_name').value.trim(),
+      playlist_name:    plNameEl ? plNameEl.value.trim() : '',
       open_browser:     document.getElementById('open_browser').checked,
       public_playlist:  document.getElementById('public_playlist').checked,
       skip_duplicates:  document.getElementById('skip_duplicates').checked,
@@ -768,7 +772,7 @@
   // ── Transfer ───────────────────────────────────────────────────────────────
   async function startTransfer() {
     if (!loadedSongs.length) return;
-    await saveConfig();
+    try { await saveConfig(); } catch(e) { console.warn('saveConfig failed:', e); }
 
     // Determine playlist target from current mode
     let selectedPlaylistId   = '';
@@ -902,6 +906,8 @@
   }
 
   function resetTransfer() {
+    fetch('/reset_transfer', {method:'POST'}).catch(() => {});
+    if (eventSource) { eventSource.close(); eventSource = null; }
     document.getElementById('card-progress').classList.add('hidden');
     document.getElementById('start-btn').disabled = false;
     updateStartButton();
