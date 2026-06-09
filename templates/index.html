@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shazam2Spotify</title>
+  <style>
+    :root {
+      --green: #1DB954;
+      --green-dark: #17a349;
+      --bg: #121212;
+      --surface: #1e1e1e;
+      --surface2: #2a2a2a;
+      --surface3: #333;
+      --text: #ffffff;
+      --text-muted: #aaaaaa;
+      --red: #e05252;
+      --yellow: #f0c040;
+      --blue: #5b9cf6;
+      --radius: 10px;
+      --shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 16px 60px;
+    }
+    header {
+      display: flex; align-items: center; gap: 14px;
+      margin-bottom: 32px; max-width: 860px; margin-inline: auto;
+    }
+    header svg { flex-shrink: 0; }
+    header h1 { font-size: 1.7rem; font-weight: 700; }
+    header h1 span { color: var(--green); }
+    .badge {
+      font-size: 0.7rem; background: var(--surface2);
+      color: var(--text-muted); border-radius: 20px;
+      padding: 2px 10px; margin-left: 8px; vertical-align: middle;
+    }
+
+    .layout { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+    .card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+    .card-title {
+      font-size: 1rem; font-weight: 600; margin-bottom: 18px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-title .step {
+      background: var(--green); color: #000;
+      border-radius: 50%; width: 22px; height: 22px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+    }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+    .form-full { grid-column: 1 / -1; }
+
+    label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 5px; }
+    input[type="text"], input[type="password"], input[type="number"], select {
+      width: 100%; background: var(--surface2);
+      border: 1px solid var(--surface3); border-radius: 6px;
+      color: var(--text); padding: 9px 12px; font-size: 0.9rem;
+      outline: none; transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: var(--green); }
+
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 0; border-bottom: 1px solid var(--surface2);
+    }
+    .toggle-row:last-child { border-bottom: none; }
+    .toggle-label { font-size: 0.9rem; }
+    .toggle-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+    .toggle {
+      position: relative; width: 44px; height: 24px; flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; inset: 0; background: var(--surface3);
+      border-radius: 24px; cursor: pointer; transition: 0.3s;
+    }
+    .toggle-slider:before {
+      content: ''; position: absolute;
+      width: 18px; height: 18px; left: 3px; top: 3px;
+      background: white; border-radius: 50%; transition: 0.3s;
+    }
+    .toggle input:checked + .toggle-slider { background: var(--green); }
+    .toggle input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 10px 20px; border-radius: 8px; border: none;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer;
+      transition: background 0.2s, transform 0.1s; text-decoration: none;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-green { background: var(--green); color: #000; }
+    .btn-green:hover { background: var(--green-dark); }
+    .btn-outline { background: transparent; color: var(--text); border: 1px solid var(--surface3); }
+    .btn-outline:hover { background: var(--surface2); }
+    .btn-red { background: var(--red); color: #fff; }
+    .btn-red:hover { background: #c94444; }
+    .btn-sm { padding: 7px 14px; font-size: 0.82rem; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+
+    .auth-status {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px; border-radius: 8px; font-size: 0.9rem;
+      margin-bottom: 16px;
+    }
+    .auth-status.ok { background: rgba(29,185,84,0.12); border: 1px solid rgba(29,185,84,0.3); }
+    .auth-status.no { background: rgba(224,82,82,0.1); border: 1px solid rgba(224,82,82,0.25); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .dot-green { background: var(--green); }
+    .dot-red { background: var(--red); }
+
+    .drop-zone {
+      border: 2px dashed var(--surface3); border-radius: var(--radius);
+      padding: 36px; text-align: center; cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      border-color: var(--green); background: rgba(29,185,84,0.05);
+    }
+    .drop-zone svg { margin-bottom: 10px; opacity: 0.5; }
+    .drop-zone p { color: var(--text-muted); font-size: 0.9rem; }
+    .drop-zone strong { color: var(--text); }
+    #csv-input { display: none; }
+
+    .csv-loaded {
+      display: flex; align-items: center; gap: 12px;
+      background: rgba(29,185,84,0.1); border: 1px solid rgba(29,185,84,0.3);
+      border-radius: 8px; padding: 12px 16px; margin-top: 12px;
+    }
+    .csv-loaded svg { flex-shrink: 0; }
+
+    .progress-bar-wrap {
+      background: var(--surface2); border-radius: 8px;
+      height: 8px; overflow: hidden; margin: 12px 0;
+    }
+    .progress-bar {
+      height: 100%; background: var(--green);
+      border-radius: 8px; transition: width 0.4s;
+      width: 0%;
+    }
+
+    .log {
+      background: var(--surface2); border-radius: 8px;
+      max-height: 320px; overflow-y: auto;
+      font-size: 0.82rem; font-family: monospace;
+      padding: 12px;
+    }
+    .log-entry {
+      display: flex; gap: 8px; align-items: flex-start;
+      padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-icon { flex-shrink: 0; margin-top: 1px; }
+    .log-added { color: var(--green); }
+    .log-notfound { color: var(--text-muted); }
+    .log-duplicate { color: var(--yellow); }
+    .log-error { color: var(--red); }
+    .log-info { color: var(--blue); }
+
+    .stats-row {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+      margin-top: 16px;
+    }
+    @media (max-width: 500px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+    .stat-box {
+      background: var(--surface2); border-radius: 8px;
+      padding: 14px; text-align: center;
+    }
+    .stat-num { font-size: 1.6rem; font-weight: 700; }
+    .stat-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+    .stat-added .stat-num { color: var(--green); }
+    .stat-notfound .stat-num { color: var(--text-muted); }
+    .stat-dup .stat-num { color: var(--yellow); }
+    .stat-total .stat-num { color: var(--blue); }
+
+    .hidden { display: none !important; }
+    .alert {
+      padding: 10px 14px; border-radius: 8px; font-size: 0.88rem;
+      margin-bottom: 12px;
+    }
+    .alert-error { background: rgba(224,82,82,0.12); border: 1px solid rgba(224,82,82,0.3); color: #f08080; }
+    .alert-success { background: rgba(29,185,84,0.12); border: 1px solid rgba(29,185,84,0.3); color: #6dda96; }
+    .alert-info { background: rgba(91,156,246,0.1); border: 1px solid rgba(91,156,246,0.25); color: #8ab8ff; }
+
+    .hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 5px; }
+    a { color: var(--green); }
+
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .spacer { flex: 1; }
+
+    #save-indicator {
+      font-size: 0.78rem; color: var(--green);
+      opacity: 0; transition: opacity 0.4s;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+    <circle cx="20" cy="20" r="20" fill="#1DB954"/>
+    <path d="M28 24.5c-4.5-2.7-10-3-14.5-1.5" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M29.5 19.5c-5.5-3.3-13-3.5-18 0" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M27 14.5c-4-2-10-2.5-14 0" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>
+  <div>
+    <h1>Shazam<span>2</span>Spotify</h1>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ── STEP 1: Config ── -->
+  <div class="card" id="card-config">
+    <div class="card-title"><span class="step">1</span> Spotify API Credentials</div>
+
+    <div id="config-alert" class="hidden"></div>
+
+    <div class="form-grid">
+      <div>
+        <label>Client ID</label>
+        <input type="text" id="client_id" placeholder="Paste your Client ID"
+               value="{{ cfg.client_id }}" autocomplete="off" />
+      </div>
+      <div>
+        <label>Client Secret</label>
+        <input type="password" id="client_secret" placeholder="Paste your Client Secret"
+               value="{{ cfg.client_secret }}" autocomplete="off" />
+      </div>
+      <div class="form-full">
+        <label>Redirect URI <span style="color:var(--text-muted)">(must match your Spotify app settings)</span></label>
+        <input type="text" id="redirect_uri" value="{{ cfg.redirect_uri }}" />
+        <p class="hint">Go to <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a> → Create App → add this exact URI as Redirect URI.</p>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:16px">
+      <button class="btn btn-green" onclick="saveConfig()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V7l-4-4zm-5 16a3 3 0 110-6 3 3 0 010 6zm3-10H5V5h10v4z"/></svg>
+        Save Credentials
+      </button>
+      <span id="save-indicator">✓ Saved</span>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: Auth ── -->
+  <div class="card" id="card-auth">
+    <div class="card-title"><span class="step">2</span> Spotify Account</div>
+
+    <div id="auth-status-box" class="auth-status {% if sp_authenticated %}ok{% else %}no{% endif %}">
+      <div class="dot {% if sp_authenticated %}dot-green{% else %}dot-red{% endif %}" id="auth-dot"></div>
+      <span id="auth-status-text">
+        {% if sp_authenticated %}Connected{% else %}Not connected{% endif %}
+      </span>
+    </div>
+
+    <div id="auth-user-info" class="{% if not sp_authenticated %}hidden{% endif %}" style="margin-bottom:12px; font-size:0.88rem; color:var(--text-muted)">
+      Logged in — <a href="/logout" style="color:var(--red)">Log out</a>
+    </div>
+
+    <div id="auth-buttons">
+      {% if not sp_authenticated %}
+      <button class="btn btn-green" onclick="startAuth()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+        Connect Spotify Account
+      </button>
+      {% else %}
+      <button class="btn btn-outline btn-sm" onclick="startAuth()">Re-authenticate</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── STEP 3: CSV ── -->
+  <div class="card" id="card-csv">
+    <div class="card-title"><span class="step">3</span> Shazam Library CSV</div>
+    <p class="hint" style="margin-bottom:14px">
+      Export from <a href="https://www.shazam.com/myshazam" target="_blank">shazam.com/myshazam</a> → Download CSV, then drop it below.
+    </p>
+
+    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('csv-input').click()">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+      </svg>
+      <p><strong>Click or drag & drop</strong> your Shazam CSV here</p>
+      <p style="margin-top:4px; font-size:0.78rem">shazamlibrary.csv</p>
+    </div>
+    <input type="file" id="csv-input" accept=".csv" onchange="handleFileSelect(this.files[0])" />
+
+    <div id="csv-loaded" class="csv-loaded hidden">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1DB954" stroke-width="2">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+      <div>
+        <div id="csv-filename" style="font-weight:600; font-size:0.9rem"></div>
+        <div id="csv-count" style="font-size:0.8rem; color:var(--text-muted)"></div>
+      </div>
+      <button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="clearCsv()">Change</button>
+    </div>
+  </div>
+
+  <!-- ── STEP 4: Options ── -->
+  <div class="card" id="card-options">
+    <div class="card-title"><span class="step">4</span> Transfer Options</div>
+
+    <div class="form-grid" style="margin-bottom:16px">
+      <div class="form-full">
+        <label>Playlist Name</label>
+        <input type="text" id="playlist_name" value="{{ cfg.playlist_name }}" placeholder="Shazam2Spotify" />
+      </div>
+      <div>
+        <label>Delay Between Requests (ms)</label>
+        <input type="number" id="delay_ms" value="{{ cfg.delay_ms }}" min="100" max="5000" step="100" />
+        <p class="hint">Lower = faster, but may hit Spotify rate limits</p>
+      </div>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Open playlist in browser when done</div>
+        <div class="toggle-desc">Automatically opens Spotify in your browser after transfer</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="open_browser" {% if cfg.open_browser %}checked{% endif %} />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Public playlist</div>
+        <div class="toggle-desc">Make the created playlist visible on your profile</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="public_playlist" {% if cfg.public_playlist %}checked{% endif %} />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Skip duplicate songs</div>
+        <div class="toggle-desc">Don't add the same track twice to the playlist</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="skip_duplicates" {% if cfg.skip_duplicates %}checked{% endif %} />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div style="margin-top:20px">
+      <button class="btn btn-green" id="start-btn" onclick="startTransfer()" disabled>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        Start Transfer
+      </button>
+      <span id="start-hint" style="font-size:0.8rem; color:var(--text-muted); margin-left:12px"></span>
+    </div>
+  </div>
+
+  <!-- ── STEP 5: Progress ── -->
+  <div class="card hidden" id="card-progress">
+    <div class="card-title">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      Transfer Progress
+    </div>
+
+    <div class="row" style="margin-bottom:8px">
+      <span id="progress-label" style="font-size:0.85rem; color:var(--text-muted)">Starting…</span>
+      <span class="spacer"></span>
+      <span id="progress-count" style="font-size:0.85rem; font-weight:600"></span>
+    </div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <div class="stats-row hidden" id="stats-row">
+      <div class="stat-box stat-total"><div class="stat-num" id="stat-total">0</div><div class="stat-label">Total</div></div>
+      <div class="stat-box stat-added"><div class="stat-num" id="stat-added">0</div><div class="stat-label">Added</div></div>
+      <div class="stat-box stat-dup"><div class="stat-num" id="stat-dup">0</div><div class="stat-label">Duplicates</div></div>
+      <div class="stat-box stat-notfound"><div class="stat-num" id="stat-notfound">0</div><div class="stat-label">Not Found</div></div>
+    </div>
+
+    <div id="done-actions" class="hidden" style="margin-top:16px">
+      <a id="playlist-link" href="#" target="_blank" class="btn btn-green">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+        Open Playlist in Spotify
+      </a>
+      <button class="btn btn-outline" style="margin-left:8px" onclick="resetTransfer()">New Transfer</button>
+    </div>
+  </div>
+
+</div><!-- end layout -->
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let loadedSongs = [];
+  let eventSource = null;
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', () => {
+    setupDragDrop();
+    updateStartButton();
+    {% if request.args.get('auth') == 'success' %}
+    checkAuth();
+    {% endif %}
+  });
+
+  // ── Config ─────────────────────────────────────────────────────────────────
+  async function saveConfig() {
+    const data = {
+      client_id:      document.getElementById('client_id').value.trim(),
+      client_secret:  document.getElementById('client_secret').value.trim(),
+      redirect_uri:   document.getElementById('redirect_uri').value.trim(),
+      playlist_name:  document.getElementById('playlist_name').value.trim(),
+      open_browser:   document.getElementById('open_browser').checked,
+      public_playlist:document.getElementById('public_playlist').checked,
+      skip_duplicates:document.getElementById('skip_duplicates').checked,
+      delay_ms:       parseInt(document.getElementById('delay_ms').value) || 500,
+    };
+    const res = await fetch('/save_config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(data)
+    });
+    if (res.ok) {
+      const ind = document.getElementById('save-indicator');
+      ind.style.opacity = '1';
+      setTimeout(() => ind.style.opacity = '0', 2000);
+      showAlert('config-alert', 'Credentials saved to config.json', 'success');
+    }
+  }
+
+  function showAlert(id, msg, type) {
+    const el = document.getElementById(id);
+    el.className = `alert alert-${type}`;
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 4000);
+  }
+
+  // ── Auth ───────────────────────────────────────────────────────────────────
+  async function startAuth() {
+    await saveConfig();
+    const res = await fetch('/spotify_auth');
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    window.open(data.auth_url, '_blank', 'width=500,height=700');
+    // Poll for auth completion
+    const poll = setInterval(async () => {
+      const r = await checkAuth();
+      if (r) clearInterval(poll);
+    }, 2000);
+  }
+
+  async function checkAuth() {
+    const res = await fetch('/check_auth');
+    const data = await res.json();
+    const box = document.getElementById('auth-status-box');
+    const dot = document.getElementById('auth-dot');
+    const text = document.getElementById('auth-status-text');
+    const info = document.getElementById('auth-user-info');
+    if (data.authenticated) {
+      box.className = 'auth-status ok';
+      dot.className = 'dot dot-green';
+      text.textContent = `Connected as ${data.name}`;
+      info.classList.remove('hidden');
+    } else {
+      box.className = 'auth-status no';
+      dot.className = 'dot dot-red';
+      text.textContent = 'Not connected';
+      info.classList.add('hidden');
+    }
+    updateStartButton();
+    return data.authenticated;
+  }
+
+  // ── CSV ────────────────────────────────────────────────────────────────────
+  function setupDragDrop() {
+    const zone = document.getElementById('drop-zone');
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault(); zone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file) handleFileSelect(file);
+    });
+  }
+
+  async function handleFileSelect(file) {
+    if (!file || !file.name.endsWith('.csv')) {
+      alert('Please select a .csv file'); return;
+    }
+    const formData = new FormData();
+    formData.append('csv_file', file);
+    const res = await fetch('/upload_csv', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+
+    // Re-read locally for the songs array
+    const text = await file.text();
+    loadedSongs = parseCSVLocally(text);
+
+    document.getElementById('drop-zone').classList.add('hidden');
+    const loaded = document.getElementById('csv-loaded');
+    loaded.classList.remove('hidden');
+    document.getElementById('csv-filename').textContent = file.name;
+    document.getElementById('csv-count').textContent = `${loadedSongs.length} songs found`;
+    updateStartButton();
+  }
+
+  function parseCSVLocally(text) {
+    const lines = text.split('\n');
+    const songs = [];
+    let headerDone = false;
+    for (const line of lines) {
+      const row = parseCSVRow(line);
+      if (!headerDone) {
+        if (row[0] && row[0].trim().toUpperCase() === 'SHAZAM LIBRARY') continue;
+        if (row[0] && row[0].trim().toLowerCase() === 'index') { headerDone = true; continue; }
+        headerDone = true; continue;
+      }
+      if (row.length >= 4) {
+        const title = row[2].trim().replace(/^"|"$/g, '');
+        const artist = row[3].trim().replace(/^"|"$/g, '');
+        if (title && artist) songs.push([title, artist]);
+      }
+    }
+    return songs;
+  }
+
+  function parseCSVRow(line) {
+    const result = []; let cur = ''; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; }
+      else if (c === ',' && !inQ) { result.push(cur); cur = ''; }
+      else cur += c;
+    }
+    result.push(cur);
+    return result;
+  }
+
+  function clearCsv() {
+    loadedSongs = [];
+    document.getElementById('drop-zone').classList.remove('hidden');
+    document.getElementById('csv-loaded').classList.add('hidden');
+    document.getElementById('csv-input').value = '';
+    updateStartButton();
+  }
+
+  // ── Start button state ─────────────────────────────────────────────────────
+  function updateStartButton() {
+    const btn = document.getElementById('start-btn');
+    const hint = document.getElementById('start-hint');
+    fetch('/check_auth').then(r => r.json()).then(data => {
+      const hasAuth = data.authenticated;
+      const hasCsv = loadedSongs.length > 0;
+      btn.disabled = !(hasAuth && hasCsv);
+      if (!hasAuth && !hasCsv) hint.textContent = 'Connect Spotify and upload CSV to begin';
+      else if (!hasAuth) hint.textContent = 'Connect your Spotify account first';
+      else if (!hasCsv) hint.textContent = 'Upload your Shazam CSV first';
+      else hint.textContent = `Ready — ${loadedSongs.length} songs`;
+    });
+  }
+
+  // ── Transfer ───────────────────────────────────────────────────────────────
+  async function startTransfer() {
+    if (!loadedSongs.length) return;
+
+    // Save options first
+    await saveConfig();
+
+    const payload = {
+      songs: loadedSongs,
+      playlist_name:  document.getElementById('playlist_name').value.trim() || 'Shazam2Spotify',
+      open_browser:   document.getElementById('open_browser').checked,
+      public_playlist:document.getElementById('public_playlist').checked,
+      skip_duplicates:document.getElementById('skip_duplicates').checked,
+      delay_ms:       parseInt(document.getElementById('delay_ms').value) || 500,
+    };
+
+    const res = await fetch('/start_transfer', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+
+    // Show progress card
+    document.getElementById('card-progress').classList.remove('hidden');
+    document.getElementById('start-btn').disabled = true;
+    document.getElementById('log').innerHTML = '';
+    document.getElementById('stats-row').classList.add('hidden');
+    document.getElementById('done-actions').classList.add('hidden');
+    document.getElementById('progress-bar').style.width = '0%';
+
+    // SSE stream
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource('/stream');
+    eventSource.onmessage = handleStreamEvent;
+    eventSource.onerror = () => {
+      addLog('Connection error', 'error');
+      eventSource.close();
+    };
+  }
+
+  function handleStreamEvent(e) {
+    const msg = JSON.parse(e.data);
+    if (msg.event === 'ping') return;
+
+    if (msg.event === 'status') {
+      addLog(msg.data.msg, msg.data.type || 'info');
+      document.getElementById('progress-label').textContent = msg.data.msg;
+    }
+
+    if (msg.event === 'playlist') {
+      document.getElementById('playlist-link').href = msg.data.url;
+    }
+
+    if (msg.event === 'song') {
+      const d = msg.data;
+      const pct = Math.round((d.i / d.total) * 100);
+      document.getElementById('progress-bar').style.width = pct + '%';
+      document.getElementById('progress-count').textContent = `${d.i} / ${d.total}`;
+      document.getElementById('progress-label').textContent = `${d.title} — ${d.artist}`;
+      addLog(`${d.title} — ${d.artist}`, d.status, d.msg);
+    }
+
+    if (msg.event === 'done') {
+      const d = msg.data;
+      document.getElementById('progress-bar').style.width = '100%';
+      document.getElementById('progress-label').textContent = 'Transfer complete!';
+      document.getElementById('stats-row').classList.remove('hidden');
+      document.getElementById('stat-total').textContent = d.total;
+      document.getElementById('stat-added').textContent = d.added;
+      document.getElementById('stat-dup').textContent = d.duplicates;
+      document.getElementById('stat-notfound').textContent = d.not_found.length;
+      document.getElementById('done-actions').classList.remove('hidden');
+      addLog(`Done! ${d.added} songs added.`, 'success');
+      if (d.open_browser && d.playlist_url) window.open(d.playlist_url, '_blank');
+      eventSource.close();
+    }
+
+    if (msg.event === 'error') {
+      addLog('Error: ' + msg.data.msg, 'error');
+      document.getElementById('progress-label').textContent = 'Error occurred';
+      eventSource.close();
+    }
+  }
+
+  function addLog(text, status, extra) {
+    const log = document.getElementById('log');
+    const icons = {
+      added:    '✓', notfound: '✗', duplicate: '~',
+      error:    '!', info:     '›', success:   '✓'
+    };
+    const entry = document.createElement('div');
+    entry.className = `log-entry log-${status}`;
+    entry.innerHTML = `<span class="log-icon">${icons[status] || '›'}</span><span>${text}${extra ? ' <span style="opacity:0.5">— ' + extra + '</span>' : ''}</span>`;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function resetTransfer() {
+    document.getElementById('card-progress').classList.add('hidden');
+    document.getElementById('start-btn').disabled = false;
+    updateStartButton();
+  }
+</script>
+</body>
+</html>

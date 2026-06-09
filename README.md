@@ -1,161 +1,108 @@
-# Shazam2Spotify — Fixed Version
+# Shazam2Spotify — Web Interface
 
-A tool that automatically transfers your entire Shazam library to a new Spotify playlist. This is a fixed and improved version of the original [jclosadev/Shazam2Spotify](https://github.com/jclosadev/Shazam2Spotify) repository.
+A web-based tool that transfers your entire Shazam library to a new Spotify playlist. Features a clean dark UI, config file for credentials, CSV drag-and-drop, live transfer progress, and full options control.
+
+![Shazam2Spotify](https://github.com/jclosadev/Shazam2Spotify/blob/master/header.jpg?raw=true)
 
 ---
 
-## What Was Fixed
+## Features
 
-The original `app.py` was obfuscated under 50 layers of encoding and contained several issues that made it broken out-of-the-box:
-
-| Issue | Original | Fixed |
-|---|---|---|
-| Hardcoded file path | `C:\Users\jclos\Desktop\...` (developer's own machine) | Relative path + `--csv` argument |
-| Hardcoded API credentials | Developer's own (likely revoked) keys | User provides their own credentials |
-| No error messages | Silent failures | Clear error messages with setup instructions |
-| Windows-only path | Backslash paths | Cross-platform (`os.path`) |
-| No CLI arguments | None | `--csv`, `--name`, `--no-browser` flags |
-| Duplicate handling | Basic | Proper deduplication with feedback |
+- **Web UI** — runs locally in your browser, no command line needed after startup
+- **Config file** — credentials saved to `config.json` on first use, loaded automatically on restart
+- **CSV drag & drop** — upload your Shazam export directly in the browser
+- **Live progress** — real-time log of every song being added
+- **Options** — playlist name, public/private, skip duplicates, request delay, open browser on finish
+- **Cross-platform** — works on Windows, macOS, and Linux
 
 ---
 
 ## Installation
 
-**1. Clone or download this repository**
-
 ```bash
-git clone https://github.com/jclosadev/Shazam2Spotify.git
+git clone https://github.com/dairyking98/Shazam2Spotify.git
 cd Shazam2Spotify
-```
-
-**2. Install dependencies**
-
-```bash
 pip install -r requirements.txt
+python web_app.py
 ```
+
+Then open **http://127.0.0.1:5000** in your browser.
 
 ---
 
-## Setup
+## Setup (one-time)
 
-### Step 1: Create a Spotify App
+### 1. Create a Spotify App
 
-1. Go to [https://developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
-2. Log in with your Spotify account
-3. Click **"Create App"**
-4. Fill in any name and description
-5. Set the **Redirect URI** to exactly: `http://127.0.0.1:8888/callback`
-   > ⚠️ **Important:** Spotify no longer accepts `localhost` as of April 2025. Use the explicit IP `127.0.0.1` instead — it works the same way but is accepted by the dashboard.
-6. Click **Save**, then open your app and copy the **Client ID** and **Client Secret**
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+2. Log in and click **Create App**
+3. Fill in any name and description
+4. Set the **Redirect URI** to: `http://127.0.0.1:8888/callback`
+   > ⚠️ Spotify no longer accepts `localhost` (banned April 2025). Use `127.0.0.1` with the port number.
+5. Check **Web API** under "Which API/SDKs are you planning to use?"
+6. Click **Save**, then copy your **Client ID** and **Client Secret**
 
-### Step 2: Configure Your Credentials
+### 2. Enter credentials in the web UI
 
-Open `shazam2spotify.py` and fill in your credentials near the top of the file:
+Paste your Client ID and Client Secret into Step 1 of the web interface and click **Save Credentials**. They are stored in `config.json` and loaded automatically next time.
 
-```python
-CLIENT_ID     = "your_client_id_here"
-CLIENT_SECRET = "your_client_secret_here"
-REDIRECT_URI  = "http://127.0.0.1:8888/callback"
-```
+### 3. Export your Shazam library
 
-Alternatively, you can use **environment variables** (recommended for security):
+1. Go to [shazam.com/myshazam](https://www.shazam.com/myshazam)
+2. Log in with your Apple/Shazam account
+3. Click **Download CSV** on the right side
 
-```bash
-# Linux / macOS
-export SPOTIPY_CLIENT_ID="your_client_id"
-export SPOTIPY_CLIENT_SECRET="your_client_secret"
-export SPOTIPY_REDIRECT_URI="http://127.0.0.1:8888/callback"
+### 4. Run the transfer
 
-# Windows (Command Prompt)
-set SPOTIPY_CLIENT_ID=your_client_id
-set SPOTIPY_CLIENT_SECRET=your_client_secret
-set SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
-```
-
-### Step 3: Export Your Shazam Library
-
-1. Go to [https://www.shazam.com/myshazam](https://www.shazam.com/myshazam)
-2. Log in with your Shazam / Apple account
-3. Click **"Download CSV"** on the right side
-4. Place the downloaded file in the `library/` folder of this project
-
-> **Note:** The CSV file should be named `shazamlibrary.csv` or you can pass a custom path using the `--csv` flag.
+1. Click **Connect Spotify Account** (Step 2) — a login window opens
+2. Drag & drop your CSV into Step 3
+3. Set your options in Step 4 (playlist name, public/private, etc.)
+4. Click **Start Transfer** and watch the live progress
 
 ---
 
-## Usage
+## Config file
+
+Credentials and preferences are saved to `config.json` in the project folder:
+
+```json
+{
+  "client_id": "your_client_id",
+  "client_secret": "your_client_secret",
+  "redirect_uri": "http://127.0.0.1:8888/callback",
+  "playlist_name": "Shazam2Spotify",
+  "open_browser": true,
+  "public_playlist": true,
+  "skip_duplicates": true,
+  "delay_ms": 500
+}
+```
+
+> **Note:** `config.json` and `.cache` (Spotify auth token) are listed in `.gitignore` so your credentials are never accidentally committed.
+
+---
+
+## CLI (optional)
+
+If you prefer the command line, `shazam2spotify.py` is still included:
 
 ```bash
-# Basic usage (uses library/shazamlibrary.csv by default)
-python shazam2spotify.py
-
-# Specify a custom CSV path
-python shazam2spotify.py --csv /path/to/your/shazamlibrary.csv
-
-# Specify a custom playlist name
-python shazam2spotify.py --name "My Shazam Discoveries"
-
-# Don't open the browser when done
-python shazam2spotify.py --no-browser
-```
-
-### First Run — Authentication
-
-The first time you run the script, a browser window will open asking you to log in to Spotify and authorize the app. After authorizing, you will be redirected to `http://127.0.0.1:8888/callback` — the script will capture this automatically and save a `.cache` file so you won't need to log in again.
-
-### Example Output
-
-```
-============================================================
-  Shazam2Spotify — Fixed Version
-============================================================
-
-[1/4] Connecting to Spotify...
-      Logged in as: Your Name (yourusername)
-
-[2/4] Reading Shazam library from: library/shazamlibrary.csv
-      Found 142 songs.
-
-[3/4] Creating Spotify playlist: 'Shazam2Spotify'
-      Playlist created with ID: 1LgH0v9zO9uPaWpba7maLd
-
-[4/4] Searching and adding songs to playlist...
-------------------------------------------------------------
-  [1/142] ✓ Added:      Blinding Lights — The Weeknd
-  [2/142] ✓ Added:      Someone Like You — Adele
-  [3/142] ✗ Not found:  Some Obscure Track — Unknown Artist
-  ...
-
-============================================================
-  Done!
-  Songs processed : 142
-  Songs added     : 138
-  Duplicates      : 1
-  Not found       : 3
-
-  Playlist URL: https://open.spotify.com/playlist/1LgH0v9zO9uPaWpba7maLd
-  Opening playlist in browser...
-============================================================
+python shazam2spotify.py --csv library/shazamlibrary.csv --name "My Playlist"
 ```
 
 ---
 
 ## Troubleshooting
 
-**"Spotify credentials are not configured"**
-→ You need to fill in `CLIENT_ID` and `CLIENT_SECRET` in the script, or set the environment variables. See Setup above.
-
-**"CSV file not found"**
-→ Make sure your Shazam export is in the `library/` folder, or pass `--csv /path/to/file`.
-
-**"INVALID_CLIENT: Invalid redirect URI"**
-→ Make sure `http://127.0.0.1:8888/callback` is added as a Redirect URI in your Spotify app settings at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
-
-**Songs not found**
-→ Some songs in your Shazam library may not be available on Spotify, or the search query may not match exactly. The script will list all not-found songs at the end.
+| Error | Fix |
+|---|---|
+| `localhost` not accepted in Spotify dashboard | Use `http://127.0.0.1:8888/callback` (with port) |
+| "Spotify credentials are not configured" | Fill in Client ID & Secret in Step 1 and click Save |
+| Songs not found | Some tracks may not be on Spotify; they're listed at the end |
+| Rate limit errors | Increase the delay in Step 4 options |
 
 ---
 
 ## Credits
 
-Original concept by [@jclosadev](https://github.com/jclosadev). This fixed version resolves compatibility and usability issues.
+Original concept by [@jclosadev](https://github.com/jclosadev). This version adds a full web interface and fixes all compatibility issues.
