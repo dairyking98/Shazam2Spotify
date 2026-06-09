@@ -39,7 +39,7 @@ def load_config():
     defaults = {
         "client_id":        "",
         "client_secret":    "",
-        "redirect_uri":     "http://127.0.0.1:8888/callback",
+        "redirect_uri":     "http://127.0.0.1:5000/callback",
         "playlist_name":    "Shazam2Spotify",
         "open_browser":     True,
         "public_playlist":  True,
