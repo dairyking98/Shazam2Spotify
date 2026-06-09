@@ -17,6 +17,7 @@
       --red: #e05252;
       --yellow: #f0c040;
       --blue: #5b9cf6;
+      --purple: #b57bee;
       --radius: 10px;
       --shadow: 0 4px 24px rgba(0,0,0,0.5);
     }
@@ -35,11 +36,6 @@
     header svg { flex-shrink: 0; }
     header h1 { font-size: 1.7rem; font-weight: 700; }
     header h1 span { color: var(--green); }
-    .badge {
-      font-size: 0.7rem; background: var(--surface2);
-      color: var(--text-muted); border-radius: 20px;
-      padding: 2px 10px; margin-left: 8px; vertical-align: middle;
-    }
 
     .layout { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
 
@@ -75,11 +71,11 @@
 
     .toggle-row {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 0; border-bottom: 1px solid var(--surface2);
+      padding: 12px 0; border-bottom: 1px solid var(--surface2);
     }
     .toggle-row:last-child { border-bottom: none; }
-    .toggle-label { font-size: 0.9rem; }
-    .toggle-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+    .toggle-label { font-size: 0.9rem; font-weight: 500; }
+    .toggle-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 3px; }
     .toggle {
       position: relative; width: 44px; height: 24px; flex-shrink: 0;
     }
@@ -95,6 +91,17 @@
     }
     .toggle input:checked + .toggle-slider { background: var(--green); }
     .toggle input:checked + .toggle-slider:before { transform: translateX(20px); }
+    .toggle-red input:checked + .toggle-slider { background: var(--red); }
+
+    /* section divider inside options card */
+    .options-section {
+      margin-top: 18px; padding-top: 14px;
+      border-top: 1px solid var(--surface3);
+    }
+    .options-section-title {
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;
+    }
 
     .btn {
       display: inline-flex; align-items: center; gap: 7px;
@@ -165,36 +172,40 @@
     }
     .log-entry:last-child { border-bottom: none; }
     .log-icon { flex-shrink: 0; margin-top: 1px; }
-    .log-added { color: var(--green); }
+    .log-added    { color: var(--green); }
+    .log-skipped  { color: var(--blue); }
     .log-notfound { color: var(--text-muted); }
     .log-duplicate { color: var(--yellow); }
-    .log-error { color: var(--red); }
-    .log-info { color: var(--blue); }
+    .log-error    { color: var(--red); }
+    .log-info     { color: var(--blue); }
+    .log-success  { color: var(--green); }
 
     .stats-row {
-      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
       margin-top: 16px;
     }
-    @media (max-width: 500px) { .stats-row { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 560px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
     .stat-box {
       background: var(--surface2); border-radius: 8px;
-      padding: 14px; text-align: center;
+      padding: 12px; text-align: center;
     }
-    .stat-num { font-size: 1.6rem; font-weight: 700; }
-    .stat-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
-    .stat-added .stat-num { color: var(--green); }
+    .stat-num { font-size: 1.5rem; font-weight: 700; }
+    .stat-label { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+    .stat-added    .stat-num { color: var(--green); }
+    .stat-skipped  .stat-num { color: var(--blue); }
     .stat-notfound .stat-num { color: var(--text-muted); }
-    .stat-dup .stat-num { color: var(--yellow); }
-    .stat-total .stat-num { color: var(--blue); }
+    .stat-dup      .stat-num { color: var(--yellow); }
+    .stat-removed  .stat-num { color: var(--red); }
+    .stat-total    .stat-num { color: var(--text); }
 
     .hidden { display: none !important; }
     .alert {
       padding: 10px 14px; border-radius: 8px; font-size: 0.88rem;
       margin-bottom: 12px;
     }
-    .alert-error { background: rgba(224,82,82,0.12); border: 1px solid rgba(224,82,82,0.3); color: #f08080; }
+    .alert-error   { background: rgba(224,82,82,0.12); border: 1px solid rgba(224,82,82,0.3); color: #f08080; }
     .alert-success { background: rgba(29,185,84,0.12); border: 1px solid rgba(29,185,84,0.3); color: #6dda96; }
-    .alert-info { background: rgba(91,156,246,0.1); border: 1px solid rgba(91,156,246,0.25); color: #8ab8ff; }
+    .alert-info    { background: rgba(91,156,246,0.1); border: 1px solid rgba(91,156,246,0.25); color: #8ab8ff; }
 
     .hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 5px; }
     a { color: var(--green); }
@@ -205,6 +216,14 @@
     #save-indicator {
       font-size: 0.78rem; color: var(--green);
       opacity: 0; transition: opacity 0.4s;
+    }
+
+    /* warning banner for remove-duplicates */
+    .warn-banner {
+      display: flex; gap: 10px; align-items: flex-start;
+      background: rgba(224,82,82,0.1); border: 1px solid rgba(224,82,82,0.3);
+      border-radius: 8px; padding: 10px 14px; margin-top: 8px;
+      font-size: 0.82rem; color: #f08080;
     }
   </style>
 </head>
@@ -316,7 +335,7 @@
   <div class="card" id="card-options">
     <div class="card-title"><span class="step">4</span> Transfer Options</div>
 
-    <div class="form-grid" style="margin-bottom:16px">
+    <div class="form-grid" style="margin-bottom:4px">
       <div class="form-full">
         <label>Playlist Name</label>
         <input type="text" id="playlist_name" value="{{ cfg.playlist_name }}" placeholder="Shazam2Spotify" />
@@ -328,35 +347,81 @@
       </div>
     </div>
 
-    <div class="toggle-row">
-      <div>
-        <div class="toggle-label">Open playlist in browser when done</div>
-        <div class="toggle-desc">Automatically opens Spotify in your browser after transfer</div>
+    <!-- Playlist settings -->
+    <div class="options-section">
+      <div class="options-section-title">Playlist</div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Public playlist</div>
+          <div class="toggle-desc">Make the created playlist visible on your Spotify profile</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="public_playlist" {% if cfg.public_playlist %}checked{% endif %} />
+          <span class="toggle-slider"></span>
+        </label>
       </div>
-      <label class="toggle">
-        <input type="checkbox" id="open_browser" {% if cfg.open_browser %}checked{% endif %} />
-        <span class="toggle-slider"></span>
-      </label>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Open playlist in browser when done</div>
+          <div class="toggle-desc">Automatically opens Spotify after the transfer finishes</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="open_browser" {% if cfg.open_browser %}checked{% endif %} />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
     </div>
-    <div class="toggle-row">
-      <div>
-        <div class="toggle-label">Public playlist</div>
-        <div class="toggle-desc">Make the created playlist visible on your profile</div>
+
+    <!-- Sync & duplicate settings -->
+    <div class="options-section">
+      <div class="options-section-title">Sync &amp; Duplicates</div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Sync mode — update existing playlist</div>
+          <div class="toggle-desc">
+            If a playlist with this name already exists, add only new songs to it instead of creating a new one.
+            Re-running the script will never insert duplicates.
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="sync_mode" {% if cfg.sync_mode %}checked{% endif %} />
+          <span class="toggle-slider"></span>
+        </label>
       </div>
-      <label class="toggle">
-        <input type="checkbox" id="public_playlist" {% if cfg.public_playlist %}checked{% endif %} />
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <div class="toggle-row">
-      <div>
-        <div class="toggle-label">Skip duplicate songs</div>
-        <div class="toggle-desc">Don't add the same track twice to the playlist</div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Skip duplicate songs in CSV</div>
+          <div class="toggle-desc">If the same song appears more than once in your Shazam export, only add it once</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="skip_duplicates" {% if cfg.skip_duplicates %}checked{% endif %} />
+          <span class="toggle-slider"></span>
+        </label>
       </div>
-      <label class="toggle">
-        <input type="checkbox" id="skip_duplicates" {% if cfg.skip_duplicates %}checked{% endif %} />
-        <span class="toggle-slider"></span>
-      </label>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Remove all duplicates from playlist</div>
+          <div class="toggle-desc">
+            After adding songs, scan the entire playlist and remove any duplicate tracks,
+            keeping only the first occurrence of each song
+          </div>
+        </div>
+        <label class="toggle toggle-red">
+          <input type="checkbox" id="remove_duplicates"
+                 {% if cfg.remove_duplicates %}checked{% endif %}
+                 onchange="toggleRemoveDupesWarning(this.checked)" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div id="remove-dupes-warning" class="warn-banner {% if not cfg.remove_duplicates %}hidden{% endif %}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        This will permanently delete duplicate tracks from your Spotify playlist. This cannot be undone.
+      </div>
     </div>
 
     <div style="margin-top:20px">
@@ -387,10 +452,29 @@
     <div class="log" id="log"></div>
 
     <div class="stats-row hidden" id="stats-row">
-      <div class="stat-box stat-total"><div class="stat-num" id="stat-total">0</div><div class="stat-label">Total</div></div>
-      <div class="stat-box stat-added"><div class="stat-num" id="stat-added">0</div><div class="stat-label">Added</div></div>
-      <div class="stat-box stat-dup"><div class="stat-num" id="stat-dup">0</div><div class="stat-label">Duplicates</div></div>
-      <div class="stat-box stat-notfound"><div class="stat-num" id="stat-notfound">0</div><div class="stat-label">Not Found</div></div>
+      <div class="stat-box stat-total">
+        <div class="stat-num" id="stat-total">0</div>
+        <div class="stat-label">Total</div>
+      </div>
+      <div class="stat-box stat-added">
+        <div class="stat-num" id="stat-added">0</div>
+        <div class="stat-label">Added</div>
+      </div>
+      <div class="stat-box stat-skipped">
+        <div class="stat-num" id="stat-skipped">0</div>
+        <div class="stat-label">Already in Playlist</div>
+      </div>
+      <div class="stat-box stat-dup">
+        <div class="stat-num" id="stat-dup">0</div>
+        <div class="stat-label">CSV Dupes</div>
+      </div>
+      <div class="stat-box stat-removed">
+        <div class="stat-num" id="stat-removed">0</div>
+        <div class="stat-label">Dupes Removed</div>
+      </div>
+    </div>
+    <div id="stat-notfound-wrap" class="hidden" style="margin-top:10px; font-size:0.82rem; color:var(--text-muted)">
+      <span id="stat-notfound-count"></span> songs not found on Spotify
     </div>
 
     <div id="done-actions" class="hidden" style="margin-top:16px">
@@ -405,11 +489,9 @@
 </div><!-- end layout -->
 
 <script>
-  // ── State ──────────────────────────────────────────────────────────────────
   let loadedSongs = [];
   let eventSource = null;
 
-  // ── Init ───────────────────────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', () => {
     setupDragDrop();
     updateStartButton();
@@ -421,14 +503,16 @@
   // ── Config ─────────────────────────────────────────────────────────────────
   async function saveConfig() {
     const data = {
-      client_id:      document.getElementById('client_id').value.trim(),
-      client_secret:  document.getElementById('client_secret').value.trim(),
-      redirect_uri:   document.getElementById('redirect_uri').value.trim(),
-      playlist_name:  document.getElementById('playlist_name').value.trim(),
-      open_browser:   document.getElementById('open_browser').checked,
-      public_playlist:document.getElementById('public_playlist').checked,
-      skip_duplicates:document.getElementById('skip_duplicates').checked,
-      delay_ms:       parseInt(document.getElementById('delay_ms').value) || 500,
+      client_id:        document.getElementById('client_id').value.trim(),
+      client_secret:    document.getElementById('client_secret').value.trim(),
+      redirect_uri:     document.getElementById('redirect_uri').value.trim(),
+      playlist_name:    document.getElementById('playlist_name').value.trim(),
+      open_browser:     document.getElementById('open_browser').checked,
+      public_playlist:  document.getElementById('public_playlist').checked,
+      skip_duplicates:  document.getElementById('skip_duplicates').checked,
+      remove_duplicates:document.getElementById('remove_duplicates').checked,
+      sync_mode:        document.getElementById('sync_mode').checked,
+      delay_ms:         parseInt(document.getElementById('delay_ms').value) || 500,
     };
     const res = await fetch('/save_config', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -450,6 +534,10 @@
     setTimeout(() => el.classList.add('hidden'), 4000);
   }
 
+  function toggleRemoveDupesWarning(show) {
+    document.getElementById('remove-dupes-warning').classList.toggle('hidden', !show);
+  }
+
   // ── Auth ───────────────────────────────────────────────────────────────────
   async function startAuth() {
     await saveConfig();
@@ -457,7 +545,6 @@
     const data = await res.json();
     if (data.error) { alert('Error: ' + data.error); return; }
     window.open(data.auth_url, '_blank', 'width=500,height=700');
-    // Poll for auth completion
     const poll = setInterval(async () => {
       const r = await checkAuth();
       if (r) clearInterval(poll);
@@ -467,18 +554,18 @@
   async function checkAuth() {
     const res = await fetch('/check_auth');
     const data = await res.json();
-    const box = document.getElementById('auth-status-box');
-    const dot = document.getElementById('auth-dot');
+    const box  = document.getElementById('auth-status-box');
+    const dot  = document.getElementById('auth-dot');
     const text = document.getElementById('auth-status-text');
     const info = document.getElementById('auth-user-info');
     if (data.authenticated) {
-      box.className = 'auth-status ok';
-      dot.className = 'dot dot-green';
+      box.className  = 'auth-status ok';
+      dot.className  = 'dot dot-green';
       text.textContent = `Connected as ${data.name}`;
       info.classList.remove('hidden');
     } else {
-      box.className = 'auth-status no';
-      dot.className = 'dot dot-red';
+      box.className  = 'auth-status no';
+      dot.className  = 'dot dot-red';
       text.textContent = 'Not connected';
       info.classList.add('hidden');
     }
@@ -499,22 +586,20 @@
   }
 
   async function handleFileSelect(file) {
-    if (!file || !file.name.endsWith('.csv')) {
+    if (!file || !file.name.toLowerCase().endsWith('.csv')) {
       alert('Please select a .csv file'); return;
     }
     const formData = new FormData();
     formData.append('csv_file', file);
-    const res = await fetch('/upload_csv', { method: 'POST', body: formData });
+    const res  = await fetch('/upload_csv', { method: 'POST', body: formData });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
 
-    // Re-read locally for the songs array
     const text = await file.text();
     loadedSongs = parseCSVLocally(text);
 
     document.getElementById('drop-zone').classList.add('hidden');
-    const loaded = document.getElementById('csv-loaded');
-    loaded.classList.remove('hidden');
+    document.getElementById('csv-loaded').classList.remove('hidden');
     document.getElementById('csv-filename').textContent = file.name;
     document.getElementById('csv-count').textContent = `${loadedSongs.length} songs found`;
     updateStartButton();
@@ -532,7 +617,7 @@
         headerDone = true; continue;
       }
       if (row.length >= 4) {
-        const title = row[2].trim().replace(/^"|"$/g, '');
+        const title  = row[2].trim().replace(/^"|"$/g, '');
         const artist = row[3].trim().replace(/^"|"$/g, '');
         if (title && artist) songs.push([title, artist]);
       }
@@ -562,51 +647,50 @@
 
   // ── Start button state ─────────────────────────────────────────────────────
   function updateStartButton() {
-    const btn = document.getElementById('start-btn');
+    const btn  = document.getElementById('start-btn');
     const hint = document.getElementById('start-hint');
     fetch('/check_auth').then(r => r.json()).then(data => {
       const hasAuth = data.authenticated;
-      const hasCsv = loadedSongs.length > 0;
+      const hasCsv  = loadedSongs.length > 0;
       btn.disabled = !(hasAuth && hasCsv);
       if (!hasAuth && !hasCsv) hint.textContent = 'Connect Spotify and upload CSV to begin';
-      else if (!hasAuth) hint.textContent = 'Connect your Spotify account first';
-      else if (!hasCsv) hint.textContent = 'Upload your Shazam CSV first';
-      else hint.textContent = `Ready — ${loadedSongs.length} songs`;
+      else if (!hasAuth)       hint.textContent = 'Connect your Spotify account first';
+      else if (!hasCsv)        hint.textContent = 'Upload your Shazam CSV first';
+      else                     hint.textContent = `Ready — ${loadedSongs.length} songs`;
     });
   }
 
   // ── Transfer ───────────────────────────────────────────────────────────────
   async function startTransfer() {
     if (!loadedSongs.length) return;
-
-    // Save options first
     await saveConfig();
 
     const payload = {
-      songs: loadedSongs,
-      playlist_name:  document.getElementById('playlist_name').value.trim() || 'Shazam2Spotify',
-      open_browser:   document.getElementById('open_browser').checked,
-      public_playlist:document.getElementById('public_playlist').checked,
-      skip_duplicates:document.getElementById('skip_duplicates').checked,
-      delay_ms:       parseInt(document.getElementById('delay_ms').value) || 500,
+      songs:            loadedSongs,
+      playlist_name:    document.getElementById('playlist_name').value.trim() || 'Shazam2Spotify',
+      open_browser:     document.getElementById('open_browser').checked,
+      public_playlist:  document.getElementById('public_playlist').checked,
+      skip_duplicates:  document.getElementById('skip_duplicates').checked,
+      remove_duplicates:document.getElementById('remove_duplicates').checked,
+      sync_mode:        document.getElementById('sync_mode').checked,
+      delay_ms:         parseInt(document.getElementById('delay_ms').value) || 500,
     };
 
-    const res = await fetch('/start_transfer', {
+    const res  = await fetch('/start_transfer', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
 
-    // Show progress card
     document.getElementById('card-progress').classList.remove('hidden');
     document.getElementById('start-btn').disabled = true;
     document.getElementById('log').innerHTML = '';
     document.getElementById('stats-row').classList.add('hidden');
+    document.getElementById('stat-notfound-wrap').classList.add('hidden');
     document.getElementById('done-actions').classList.add('hidden');
     document.getElementById('progress-bar').style.width = '0%';
 
-    // SSE stream
     if (eventSource) eventSource.close();
     eventSource = new EventSource('/stream');
     eventSource.onmessage = handleStreamEvent;
@@ -643,12 +727,20 @@
       document.getElementById('progress-bar').style.width = '100%';
       document.getElementById('progress-label').textContent = 'Transfer complete!';
       document.getElementById('stats-row').classList.remove('hidden');
-      document.getElementById('stat-total').textContent = d.total;
-      document.getElementById('stat-added').textContent = d.added;
-      document.getElementById('stat-dup').textContent = d.duplicates;
-      document.getElementById('stat-notfound').textContent = d.not_found.length;
+      document.getElementById('stat-total').textContent   = d.total;
+      document.getElementById('stat-added').textContent   = d.added;
+      document.getElementById('stat-skipped').textContent = d.skipped;
+      document.getElementById('stat-dup').textContent     = d.csv_dupes;
+      document.getElementById('stat-removed').textContent = d.dupes_removed;
+      if (d.not_found.length) {
+        document.getElementById('stat-notfound-wrap').classList.remove('hidden');
+        document.getElementById('stat-notfound-count').textContent = d.not_found.length;
+      }
       document.getElementById('done-actions').classList.remove('hidden');
-      addLog(`Done! ${d.added} songs added.`, 'success');
+      let summary = `Done! ${d.added} added`;
+      if (d.skipped)       summary += `, ${d.skipped} already in playlist`;
+      if (d.dupes_removed) summary += `, ${d.dupes_removed} duplicates removed`;
+      addLog(summary, 'success');
       if (d.open_browser && d.playlist_url) window.open(d.playlist_url, '_blank');
       eventSource.close();
     }
@@ -663,8 +755,13 @@
   function addLog(text, status, extra) {
     const log = document.getElementById('log');
     const icons = {
-      added:    '✓', notfound: '✗', duplicate: '~',
-      error:    '!', info:     '›', success:   '✓'
+      added:     '✓',
+      skipped:   '→',
+      notfound:  '✗',
+      duplicate: '~',
+      error:     '!',
+      info:      '›',
+      success:   '✓',
     };
     const entry = document.createElement('div');
     entry.className = `log-entry log-${status}`;
