@@ -117,11 +117,13 @@ def get_all_playlist_track_ids(sp, playlist_id):
 
 def find_existing_playlist(sp, user_id, name):
     # Direct call to /v1/me/playlists — works on all spotipy versions
+    # Note: /me/playlists only returns playlists the user owns or follows,
+    # so no need to filter by owner — just match by name.
     offset = 0
     while True:
         results = sp._get("me/playlists", limit=50, offset=offset)
-        for pl in results["items"]:
-            if pl["owner"]["id"] == user_id and pl["name"] == name:
+        for pl in (results.get("items") or []):
+            if pl and pl.get("name") == name:
                 return pl
         if results.get("next"):
             offset += 50
