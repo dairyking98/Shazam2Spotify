@@ -113,10 +113,10 @@ def get_all_playlist_track_ids(sp, playlist_id):
 
 
 def find_existing_playlist(sp, user_id, name):
-    # Use current_user_playlists (sp.user_playlists was removed by Spotify in 2024)
+    # Direct call to /v1/me/playlists — works on all spotipy versions
     offset = 0
     while True:
-        results = sp.current_user_playlists(limit=50, offset=offset)
+        results = sp._get("me/playlists", limit=50, offset=offset)
         for pl in results["items"]:
             if pl["owner"]["id"] == user_id and pl["name"] == name:
                 return pl
@@ -216,10 +216,15 @@ def run_transfer(cfg, songs):
             playlist_url = existing["external_urls"]["spotify"]
             emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
         else:
-            # current_user_playlist_create uses /v1/me/playlists (modern endpoint)
-            playlist = sp.current_user_playlist_create(
-                name=playlist_name, public=public,
-                description="Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify"
+            # Use direct API call to /v1/me/playlists — works on all spotipy versions
+            # (current_user_playlist_create only exists in newer spotipy builds)
+            playlist = sp._post(
+                "me/playlists",
+                payload={
+                    "name": playlist_name,
+                    "public": public,
+                    "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
+                }
             )
             playlist_id  = playlist["id"]
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
