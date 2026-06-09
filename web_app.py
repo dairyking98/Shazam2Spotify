@@ -95,17 +95,19 @@ def make_sp(cfg):
 
 
 def get_all_playlist_track_ids(sp, playlist_id):
-    # Use direct API call — sp.playlist_items with fields= can 403 on some app configs
+    # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     ids = set()
     offset = 0
     while True:
         results = sp._get(
-            f"playlists/{playlist_id}/tracks",
+            f"playlists/{playlist_id}/items",
             limit=100, offset=offset
         )
         for item in results.get("items", []):
-            if item and item.get("track") and item["track"].get("id"):
-                ids.add(item["track"]["id"])
+            # Feb 2026: field renamed from 'track' to 'item'
+            track = item.get("track") or item.get("item") if item else None
+            if track and track.get("id"):
+                ids.add(track["id"])
         if results.get("next"):
             offset += 100
         else:
@@ -129,13 +131,16 @@ def find_existing_playlist(sp, user_id, name):
 
 
 def remove_playlist_duplicates(sp, playlist_id):
+    # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     items = []
     offset = 0
     while True:
-        results = sp._get(f"playlists/{playlist_id}/tracks", limit=100, offset=offset)
+        results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
         for item in results.get("items", []):
-            if item and item.get("track") and item["track"].get("id"):
-                items.append({"id": item["track"]["id"], "uri": item["track"]["uri"]})
+            # Feb 2026: field renamed from 'track' to 'item'
+            track = item.get("track") or item.get("item") if item else None
+            if track and track.get("id"):
+                items.append({"id": track["id"], "uri": track["uri"]})
         if results.get("next"):
             offset += 100
         else:
@@ -153,9 +158,10 @@ def remove_playlist_duplicates(sp, playlist_id):
     removed = 0
     for uri, positions in uri_positions.items():
         for pos in sorted(positions, reverse=True):
+            # Use /items endpoint for DELETE too
             sp._delete(
-                f"playlists/{playlist_id}/tracks",
-                payload={"tracks": [{"uri": uri, "positions": [pos]}]}
+                f"playlists/{playlist_id}/items",
+                payload={"items": [{"uri": uri, "positions": [pos]}]}
             )
             removed += 1
             time.sleep(0.2)
@@ -263,7 +269,8 @@ def run_transfer(cfg, songs):
                         emit("song", {"i": i, "total": total, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
-                        sp._post(f"playlists/{playlist_id}/tracks", payload={"uris": [f"spotify:track:{tid}"]})
+                        # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
+                        sp._post(f"playlists/{playlist_id}/items", payload={"uris": [f"spotify:track:{tid}"]})
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
@@ -406,8 +413,9 @@ def test_add_track():
         pl_name = playlists["items"][0]["name"]
 
         # Try adding a well-known track (Never Gonna Give You Up)
+        # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
         test_uri = "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
-        url = f"https://api.spotify.com/v1/playlists/{pl_id}/tracks"
+        url = f"https://api.spotify.com/v1/playlists/{pl_id}/items"
         resp = req.post(
             url,
             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
