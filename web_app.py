@@ -549,6 +549,35 @@ def logout():
     return redirect(url_for("index"))
 
 
+@app.route("/debug_playlist")
+def debug_playlist():
+    """Debug: show raw structure of first few playlist items to verify field names."""
+    cfg = load_config()
+    try:
+        sp = make_sp(cfg)
+        playlists = sp._get("me/playlists", limit=1)
+        if not playlists["items"]:
+            return jsonify({"error": "No playlists found"})
+        pl_id = playlists["items"][0]["id"]
+        pl_name = playlists["items"][0]["name"]
+        # Fetch first 3 items raw
+        results = sp._get(f"playlists/{pl_id}/items", limit=3, offset=0)
+        # Show full raw structure of first item
+        raw_items = results.get("items", [])
+        first_keys = list(raw_items[0].keys()) if raw_items else []
+        first_track_keys = list(raw_items[0].get("track", raw_items[0].get("item", {})).keys()) if raw_items else []
+        return jsonify({
+            "playlist": pl_name,
+            "playlist_id": pl_id,
+            "total_items": results.get("total"),
+            "first_item_keys": first_keys,
+            "first_track_keys": first_track_keys,
+            "first_item_raw": raw_items[0] if raw_items else None,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route("/download_report/<filename>")
 def download_report(filename):
     """Download a transfer report CSV from the library folder."""
