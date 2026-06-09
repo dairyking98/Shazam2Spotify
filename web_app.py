@@ -212,44 +212,47 @@ def run_transfer(cfg, songs):
         user = sp.current_user()
         emit("status", {"msg": f"Logged in as {user['display_name']}", "type": "success"})
 
-        playlist_name = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
-        public        = cfg.get("public_playlist", True)
-        sync_mode     = cfg.get("sync_mode", True)
-        remove_dupes  = cfg.get("remove_duplicates", False)
-        skip_dupes    = cfg.get("skip_duplicates", True)
-        delay         = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
+        playlist_name    = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
+        selected_pl_id   = cfg.get("selected_playlist_id", "")   # set when user picks from dropdown
+        selected_pl_name = cfg.get("selected_playlist_name", "") # display name for the chosen playlist
+        public           = cfg.get("public_playlist", True)
+        sync_mode        = cfg.get("sync_mode", True)
+        remove_dupes     = cfg.get("remove_duplicates", False)
+        skip_dupes       = cfg.get("skip_duplicates", True)
+        delay            = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
 
-        # Always search for existing playlist by name first to avoid creating duplicates.
-        # sync_mode controls whether already-added songs are skipped, but we always
-        # reuse an existing playlist rather than creating a second one with the same name.
-        emit("status", {"msg": f"Searching for existing playlist '{playlist_name}'...", "type": "info"})
-        existing = find_existing_playlist(sp, user["id"], playlist_name)
         is_new_playlist = False
-        if existing:
-            playlist_id  = existing["id"]
-            playlist_url = existing["external_urls"]["spotify"]
-            if sync_mode:
-                emit("status", {"msg": f"Found '{playlist_name}' — will only add new songs", "type": "info"})
-            else:
-                emit("status", {"msg": f"Found '{playlist_name}' — adding all songs (sync off)", "type": "info"})
-        else:
-            # No existing playlist found — create a fresh one
-            playlist = sp._post(
-                "me/playlists",
-                payload={
-                    "name": playlist_name,
-                    "public": public,
-                    "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
-                }
-            )
-            playlist_id  = playlist["id"]
+
+        if selected_pl_id:
+            # User picked an existing playlist from the dropdown
+            playlist_id  = selected_pl_id
+            display_name = selected_pl_name or playlist_id
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-            is_new_playlist = True
-            emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
+            emit("status", {"msg": f"Using selected playlist '{display_name}'", "type": "info"})
+        else:
+            # User typed a new playlist name — search for it first to avoid duplicates
+            emit("status", {"msg": f"Searching for existing playlist '{playlist_name}'...", "type": "info"})
+            existing = find_existing_playlist(sp, user["id"], playlist_name)
+            if existing:
+                playlist_id  = existing["id"]
+                playlist_url = existing["external_urls"]["spotify"]
+                emit("status", {"msg": f"Found '{playlist_name}' — will add songs to it", "type": "info"})
+            else:
+                playlist = sp._post(
+                    "me/playlists",
+                    payload={
+                        "name": playlist_name,
+                        "public": public,
+                        "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
+                    }
+                )
+                playlist_id  = playlist["id"]
+                playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+                is_new_playlist = True
+                emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
         # Fetch existing tracks to skip already-added songs.
-        # Always do this when syncing to an existing playlist; skip only for brand-new ones.
         if is_new_playlist:
             existing_ids = set()
             emit("status", {"msg": "New playlist — no duplicate check needed", "type": "info"})
@@ -258,7 +261,6 @@ def run_transfer(cfg, songs):
             existing_ids = get_all_playlist_track_ids(sp, playlist_id)
             emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist — will skip these", "type": "info"})
         else:
-            # sync_mode off but playlist exists — still fetch so skip_duplicates works correctly
             existing_ids = set()
 
         total       = len(songs)
@@ -529,7 +531,8 @@ def start_transfer():
     cfg = load_config()
     # Override with values sent from UI
     for key in ("playlist_name", "open_browser", "public_playlist",
-                "skip_duplicates", "remove_duplicates", "sync_mode", "delay_ms"):
+                "skip_duplicates", "remove_duplicates", "sync_mode", "delay_ms",
+                "selected_playlist_id", "selected_playlist_name"):
         if key in data:
             cfg[key] = data[key]
     transfer_queue   = queue.Queue()
@@ -555,6 +558,33 @@ def stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/get_playlists")
+def get_playlists():
+    """Return all user playlists for the dropdown."""
+    cfg = load_config()
+    try:
+        sp = make_sp(cfg)
+        playlists = []
+        offset = 0
+        while True:
+            results = sp._get("me/playlists", limit=50, offset=offset)
+            for pl in (results.get("items") or []):
+                if pl:
+                    playlists.append({
+                        "id":     pl.get("id"),
+                        "name":   pl.get("name"),
+                        "tracks": pl.get("tracks", {}).get("total", 0),
+                        "url":    pl.get("external_urls", {}).get("spotify", ""),
+                    })
+            if results.get("next"):
+                offset += 50
+            else:
+                break
+        return jsonify({"playlists": playlists})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/logout")
