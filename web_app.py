@@ -91,7 +91,7 @@ def make_auth_manager(cfg):
 
 
 def make_sp(cfg):
-    return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
+    return spotipy.Spotify(auth_manager=make_auth_manager(cfg), requests_timeout=10, retries=3)
 
 
 def get_all_playlist_track_ids(sp, playlist_id):
@@ -276,11 +276,14 @@ def run_transfer(cfg, songs):
                         all_results.append((title, artist, tname, tartist, "Already in playlist"))
                         emit("song", {"i": i, "total": total, "status": "skipped",
                                       "title": tname, "artist": tartist, "msg": "Already in playlist"})
+                        # No delay needed for skipped songs — no API write call was made
+                        continue
                     elif skip_dupes and tid in session_ids:
                         csv_dupes += 1
                         all_results.append((title, artist, tname, tartist, "Duplicate in CSV"))
                         emit("song", {"i": i, "total": total, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
+                        continue
                     else:
                         # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
                         sp._post(f"playlists/{playlist_id}/items", payload={"uris": [f"spotify:track:{tid}"]})
@@ -297,9 +300,15 @@ def run_transfer(cfg, songs):
                                   "title": title, "artist": artist, "msg": "Not found on Spotify"})
                 time.sleep(delay)
             except Exception as e:
+                err_msg = str(e)
+                all_results.append((title, artist, "", "", f"Error: {err_msg}"))
                 emit("song", {"i": i, "total": total, "status": "error",
-                              "title": title, "artist": artist, "msg": str(e)})
-                time.sleep(1)
+                              "title": title, "artist": artist, "msg": err_msg})
+                # Back off longer on rate limit errors (429)
+                if "429" in err_msg or "rate" in err_msg.lower():
+                    time.sleep(5)
+                else:
+                    time.sleep(1)
 
         # Remove duplicates pass
         dupes_removed = 0
