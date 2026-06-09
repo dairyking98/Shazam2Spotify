@@ -572,10 +572,13 @@ def get_playlists():
             results = sp._get("me/playlists", limit=50, offset=offset)
             for pl in (results.get("items") or []):
                 if pl:
+                    # Feb 2026 API change: 'tracks' renamed to 'items' in playlist objects.
+                    # Fall back to 'tracks' for older API versions / cached responses.
+                    items_obj = pl.get("items") or pl.get("tracks") or {}
                     playlists.append({
                         "id":     pl.get("id"),
                         "name":   pl.get("name"),
-                        "tracks": pl.get("tracks", {}).get("total", 0),
+                        "tracks": items_obj.get("total", 0),
                         "url":    pl.get("external_urls", {}).get("spotify", ""),
                     })
             if results.get("next"):
