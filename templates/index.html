@@ -380,10 +380,10 @@
     <div class="options-section">
       <div class="options-section-title">Playlist</div>
 
-      <div class="toggle-row">
+      <div class="toggle-row" id="public-playlist-row">
         <div>
           <div class="toggle-label">Public playlist</div>
-          <div class="toggle-desc">Make the created playlist visible on your Spotify profile</div>
+          <div class="toggle-desc">Make the new playlist visible on your Spotify profile</div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="public_playlist" {% if cfg.public_playlist %}checked{% endif %} />
@@ -482,6 +482,10 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
         Open Playlist in Spotify
       </a>
+      <button class="btn btn-outline" style="margin-left:8px" onclick="downloadReport()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Export Report
+      </button>
       <button class="btn btn-outline" style="margin-left:8px" onclick="resetTransfer()">New Transfer</button>
     </div>
   </div>
@@ -489,8 +493,10 @@
 </div><!-- end layout -->
 
 <script>
-  let loadedSongs = [];
-  let eventSource = null;
+  let loadedSongs     = [];
+  let rawCsvRows      = null;   // { headers: [...], rows: [[...], ...] }
+  let transferResults = [];     // indexed by song position (0-based): {status, spotifyTitle, spotifyArtist, msg}
+  let eventSource     = null;
 
   document.addEventListener('DOMContentLoaded', () => {
     setupDragDrop();
@@ -599,6 +605,8 @@
 
     const text = await file.text();
     loadedSongs = parseCSVLocally(text);
+    rawCsvRows  = parseCSVFull(text);
+    transferResults = [];
 
     document.getElementById('drop-zone').classList.add('hidden');
     document.getElementById('csv-loaded').classList.remove('hidden');
@@ -627,6 +635,23 @@
     return songs;
   }
 
+  function parseCSVFull(text) {
+    const lines = text.split('\n');
+    let headers = null;
+    let headerDone = false;
+    const rows = [];
+    for (const line of lines) {
+      const row = parseCSVRow(line);
+      if (!headerDone) {
+        if (row[0] && row[0].trim().toUpperCase() === 'SHAZAM LIBRARY') continue;
+        if (row[0] && row[0].trim().toLowerCase() === 'index') { headers = row; headerDone = true; continue; }
+        headerDone = true; continue;
+      }
+      if (row.length >= 2 && row.some(c => c.trim())) rows.push(row);
+    }
+    return { headers: headers || ['Index','TagTime','Title','Artist','URL'], rows };
+  }
+
   function parseCSVRow(line) {
     const result = []; let cur = ''; let inQ = false;
     for (let i = 0; i < line.length; i++) {
@@ -640,7 +665,9 @@
   }
 
   function clearCsv() {
-    loadedSongs = [];
+    loadedSongs     = [];
+    rawCsvRows      = null;
+    transferResults = [];
     document.getElementById('drop-zone').classList.remove('hidden');
     document.getElementById('csv-loaded').classList.add('hidden');
     document.getElementById('csv-input').value = '';
@@ -724,6 +751,12 @@
       document.getElementById('progress-count').textContent = `${d.i} / ${d.total}`;
       document.getElementById('progress-label').textContent = `${d.title} — ${d.artist}`;
       addLog(`${d.title} — ${d.artist}`, d.status, d.msg);
+      transferResults[d.i - 1] = {
+        status:        d.status,
+        spotifyTitle:  d.status !== 'notfound' ? d.title  : '',
+        spotifyArtist: d.status !== 'notfound' ? d.artist : '',
+        msg:           d.msg || '',
+      };
     }
 
     if (msg.event === 'done') {
@@ -787,8 +820,49 @@
     document.getElementById('tab-new').classList.toggle('active', !isExisting);
     document.getElementById('playlist-existing-panel').classList.toggle('hidden', !isExisting);
     document.getElementById('playlist-new-panel').classList.toggle('hidden', isExisting);
+    // Public playlist option only applies when creating a new playlist
+    document.getElementById('public-playlist-row').classList.toggle('hidden', isExisting);
   }
 
+  // ── Report export ──────────────────────────────────────────────────────────
+  function csvEscape(val) {
+    const s = String(val ?? '');
+    return (s.includes(',') || s.includes('"') || s.includes('\n'))
+      ? '"' + s.replace(/"/g, '""') + '"'
+      : s;
+  }
+
+  function downloadReport() {
+    if (!rawCsvRows || !transferResults.length) return;
+    const { headers, rows } = rawCsvRows;
+    const statusLabels = {
+      added:     'Added',
+      skipped:   'Already in playlist',
+      notfound:  'Not found on Spotify',
+      duplicate: 'Duplicate in CSV',
+      error:     'Error',
+    };
+    const outHeaders = [...headers, 'Transfer Status', 'Spotify Title', 'Spotify Artist', 'Notes'];
+    const lines = [outHeaders.map(csvEscape).join(',')];
+    rows.forEach((row, idx) => {
+      const r   = transferResults[idx] || {};
+      const out = [
+        ...row,
+        statusLabels[r.status] || '',
+        r.spotifyTitle  || '',
+        r.spotifyArtist || '',
+        r.msg           || '',
+      ];
+      lines.push(out.map(csvEscape).join(','));
+    });
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'shazam2spotify_report.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Playlist selector ──────────────────────────────────────────────────────
   async function loadPlaylists() {
     const sel = document.getElementById('playlist_select');
     sel.innerHTML = '<option value="" disabled selected>Loading…</option>';

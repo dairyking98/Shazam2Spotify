@@ -10,6 +10,7 @@ import io
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -106,25 +107,30 @@ def make_sp(cfg):
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
 
 
+def _norm(s):
+    return re.sub(r'[^a-z0-9]', '', s.lower())
+
+
 def get_all_playlist_track_ids(sp, playlist_id):
     # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
-    ids = set()
-    offset = 0
+    ids     = set()
+    by_name = {}   # {(norm_title, norm_artist): (track_id, spotify_name, spotify_artist)}
+    offset  = 0
     while True:
-        results = sp._get(
-            f"playlists/{playlist_id}/items",
-            limit=100, offset=offset
-        )
+        results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
         for item in results.get("items", []):
-            # Feb 2026: field renamed from 'track' to 'item'
             track = item.get("track") or item.get("item") if item else None
             if track and track.get("id"):
-                ids.add(track["id"])
+                tid    = track["id"]
+                tname  = track.get("name", "")
+                tart   = track["artists"][0]["name"] if track.get("artists") else ""
+                ids.add(tid)
+                by_name[(_norm(tname), _norm(tart))] = (tid, tname, tart)
         if results.get("next"):
             offset += 100
         else:
             break
-    return ids
+    return ids, by_name
 
 
 def find_existing_playlist(sp, user_id, name):
@@ -261,12 +267,16 @@ def run_transfer(cfg, songs):
 
         # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
         if is_new_playlist:
-            existing_ids = set()
+            existing_ids, existing_by_name = set(), {}
             emit("status", {"msg": "New playlist — skipping duplicate check", "type": "info"})
         else:
-            emit("status", {"msg": "Checking existing playlist tracks...", "type": "info"})
-            existing_ids = get_all_playlist_track_ids(sp, playlist_id)
+            emit("status", {"msg": "Fetching existing playlist tracks...", "type": "info"})
+            existing_ids, existing_by_name = get_all_playlist_track_ids(sp, playlist_id)
             emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
+            if existing_by_name:
+                prescreened = sum(1 for t, a in songs if (_norm(t), _norm(a)) in existing_by_name)
+                if prescreened:
+                    emit("status", {"msg": f"{prescreened}/{total} songs matched in playlist by name — skipping Spotify search for those", "type": "info"})
 
         total       = len(songs)
         session_ids = set()
@@ -277,6 +287,21 @@ def run_transfer(cfg, songs):
             if shutdown_event.is_set():
                 break
             try:
+                # Pre-screen: if normalized title+artist matches a track already in the playlist,
+                # skip the Spotify search entirely to save API calls on re-transfers
+                pre = existing_by_name.get((_norm(title), _norm(artist)))
+                if pre:
+                    m_tid, m_name, m_art = pre
+                    if skip_dupes and m_tid in session_ids:
+                        csv_dupes += 1
+                        emit("song", {"i": i, "total": total, "status": "duplicate",
+                                      "title": m_name, "artist": m_art, "msg": "Duplicate in CSV"})
+                    else:
+                        skipped += 1
+                        emit("song", {"i": i, "total": total, "status": "skipped",
+                                      "title": m_name, "artist": m_art, "msg": "Already in playlist"})
+                    continue
+
                 results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)
                 tracks  = results["tracks"]["items"]
                 if tracks:
