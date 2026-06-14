@@ -276,7 +276,7 @@ def run_transfer(cfg, songs):
             if existing_by_name:
                 prescreened = sum(1 for t, a in songs if (_norm(t), _norm(a)) in existing_by_name)
                 if prescreened:
-                    emit("status", {"msg": f"{prescreened}/{total} songs matched in playlist by name — skipping Spotify search for those", "type": "info"})
+                    emit("status", {"msg": f"{prescreened}/{len(songs)} songs matched in playlist by name — skipping Spotify search for those", "type": "info"})
 
         total       = len(songs)
         session_ids = set()
