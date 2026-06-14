@@ -66,7 +66,6 @@ DEFAULTS = {
     "client_secret": "",
     "redirect_uri":  "http://127.0.0.1:5000/callback",
     "playlist_name": "Shazam2Spotify",
-    "open_browser":  True,
     "public_playlist": True,
     "dupes_mode":    "skip",   # "skip" | "remove" | "none"
     "delay_ms":      500,
@@ -348,7 +347,6 @@ def run_transfer(cfg, songs):
             "total": total, "added": added, "skipped": skipped,
             "csv_dupes": csv_dupes, "dupes_removed": dupes_removed,
             "not_found": not_found, "playlist_url": playlist_url,
-            "open_browser": cfg.get("open_browser", True),
         })
 
     except Exception as e:
@@ -390,7 +388,6 @@ def save_config_route():
         "client_secret": data.get("client_secret", old_cfg.get("client_secret", "")).strip(),
         "redirect_uri":  new_uri,
         "playlist_name": data.get("playlist_name", old_cfg.get("playlist_name", "Shazam2Spotify")).strip() or "Shazam2Spotify",
-        "open_browser":  bool(data.get("open_browser", old_cfg.get("open_browser", True))),
         "public_playlist": bool(data.get("public_playlist", old_cfg.get("public_playlist", True))),
         "dupes_mode":    data.get("dupes_mode", old_cfg.get("dupes_mode", "skip")),
         "delay_ms":      int(data.get("delay_ms", old_cfg.get("delay_ms", 500))),
@@ -565,8 +562,7 @@ def start_transfer():
         return jsonify({"error": "No songs to transfer"}), 400
     cfg = load_config()
     # Override with values sent from UI
-    for key in ("playlist_name", "playlist_id", "open_browser", "public_playlist",
-                "dupes_mode", "delay_ms"):
+    for key in ("playlist_name", "playlist_id", "public_playlist", "dupes_mode", "delay_ms"):
         if key in data:
             cfg[key] = data[key]
     transfer_queue   = queue.Queue()

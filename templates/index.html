@@ -391,16 +391,6 @@
         </label>
       </div>
 
-      <div class="toggle-row">
-        <div>
-          <div class="toggle-label">Open playlist in browser when done</div>
-          <div class="toggle-desc">Automatically opens Spotify after the transfer finishes</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="open_browser" {% if cfg.open_browser %}checked{% endif %} />
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
     </div>
 
     <!-- Duplicate settings -->
@@ -486,6 +476,10 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
         Export Report
       </button>
+      <button class="btn btn-outline" style="margin-left:8px" onclick="downloadNotFound()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Export Not Found
+      </button>
       <button class="btn btn-outline" style="margin-left:8px" onclick="resetTransfer()">New Transfer</button>
     </div>
   </div>
@@ -515,7 +509,6 @@
       client_secret:   document.getElementById('client_secret').value.trim(),
       redirect_uri:    document.getElementById('redirect_uri').value.trim(),
       playlist_name:   plNameEl ? plNameEl.value.trim() : '',
-      open_browser:    document.getElementById('open_browser').checked,
       public_playlist: document.getElementById('public_playlist').checked,
       dupes_mode:      document.getElementById('dupes_mode').value,
       delay_ms:        parseInt(document.getElementById('delay_ms').value) || 500,
@@ -701,7 +694,6 @@
       songs:           loadedSongs,
       playlist_id:     isNewPl ? null : sel.value,
       playlist_name:   plNameEl ? plNameEl.value.trim() || 'Shazam2Spotify' : 'Shazam2Spotify',
-      open_browser:    document.getElementById('open_browser').checked,
       public_playlist: document.getElementById('public_playlist').checked,
       dupes_mode:      document.getElementById('dupes_mode').value,
       delay_ms:        parseInt(document.getElementById('delay_ms').value) || 500,
@@ -778,7 +770,6 @@
       if (d.skipped)       summary += `, ${d.skipped} already in playlist`;
       if (d.dupes_removed) summary += `, ${d.dupes_removed} duplicates removed`;
       addLog(summary, 'success');
-      if (d.open_browser && d.playlist_url) window.open(d.playlist_url, '_blank');
       eventSource.close();
     }
 
@@ -830,6 +821,24 @@
     return (s.includes(',') || s.includes('"') || s.includes('\n'))
       ? '"' + s.replace(/"/g, '""') + '"'
       : s;
+  }
+
+  function downloadNotFound() {
+    if (!rawCsvRows || !transferResults.length) return;
+    const { headers, rows } = rawCsvRows;
+    const outHeaders = [...headers, 'Transfer Status', 'Notes'];
+    const lines = [outHeaders.map(csvEscape).join(',')];
+    rows.forEach((row, idx) => {
+      const r = transferResults[idx] || {};
+      if (r.status !== 'notfound') return;
+      lines.push([...row, 'Not found on Spotify', r.msg || ''].map(csvEscape).join(','));
+    });
+    if (lines.length === 1) { alert('No songs were missing from Spotify in this transfer.'); return; }
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'shazam2spotify_not_found.csv'; a.click();
+    URL.revokeObjectURL(url);
   }
 
   function downloadReport() {
