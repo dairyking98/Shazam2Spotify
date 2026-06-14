@@ -218,6 +218,21 @@
       opacity: 0; transition: opacity 0.4s;
     }
 
+    /* playlist tab switcher */
+    .tab-bar {
+      display: flex; gap: 2px; background: var(--surface2);
+      border-radius: 8px; padding: 3px; margin-bottom: 10px;
+      width: fit-content;
+    }
+    .tab {
+      padding: 6px 16px; border: none; border-radius: 6px;
+      background: transparent; color: var(--text-muted);
+      font-size: 0.85rem; font-weight: 500; cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tab.active { background: var(--surface3); color: var(--text); }
+    .tab:hover:not(.active) { background: rgba(255,255,255,0.05); color: var(--text); }
+
     /* warning banner for remove-duplicates */
     .warn-banner {
       display: flex; gap: 10px; align-items: flex-start;
@@ -337,8 +352,22 @@
 
     <div class="form-grid" style="margin-bottom:4px">
       <div class="form-full">
-        <label>Playlist Name</label>
-        <input type="text" id="playlist_name" value="{{ cfg.playlist_name }}" placeholder="Shazam2Spotify" />
+        <label>Playlist</label>
+        <div class="tab-bar">
+          <button class="tab active" id="tab-existing" onclick="setPlaylistTab('existing')">Existing</button>
+          <button class="tab" id="tab-new" onclick="setPlaylistTab('new')">New</button>
+        </div>
+        <div id="playlist-existing-panel">
+          <div class="row" style="gap:8px">
+            <select id="playlist_select" style="flex:1">
+              <option value="" disabled selected>— connect Spotify to load playlists —</option>
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="loadPlaylists()" title="Refresh playlist list">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="playlist-new-panel" class="hidden">
+          <input type="text" id="playlist_name" value="{{ cfg.playlist_name }}" placeholder="New playlist name" />
+        </div>
       </div>
       <div>
         <label>Delay Between Requests (ms)</label>
@@ -374,53 +403,24 @@
       </div>
     </div>
 
-    <!-- Sync & duplicate settings -->
+    <!-- Duplicate settings -->
     <div class="options-section">
-      <div class="options-section-title">Sync &amp; Duplicates</div>
+      <div class="options-section-title">Duplicates</div>
 
       <div class="toggle-row">
         <div>
-          <div class="toggle-label">Sync mode — update existing playlist</div>
-          <div class="toggle-desc">
-            If a playlist with this name already exists, add only new songs to it instead of creating a new one.
-            Re-running the script will never insert duplicates.
-          </div>
+          <div class="toggle-label">Duplicate handling</div>
+          <div class="toggle-desc">What to do with songs that already exist in the playlist or appear more than once in your CSV</div>
         </div>
-        <label class="toggle">
-          <input type="checkbox" id="sync_mode" {% if cfg.sync_mode %}checked{% endif %} />
-          <span class="toggle-slider"></span>
-        </label>
+        <select id="dupes_mode" onchange="onDupesModeChange()" style="width:auto;flex-shrink:0">
+          <option value="skip"   {% if cfg.get('dupes_mode','skip') == 'skip'   %}selected{% endif %}>Skip duplicates</option>
+          <option value="remove" {% if cfg.get('dupes_mode','skip') == 'remove' %}selected{% endif %}>Skip + clean playlist after</option>
+          <option value="none"   {% if cfg.get('dupes_mode','skip') == 'none'   %}selected{% endif %}>No filtering</option>
+        </select>
       </div>
-
-      <div class="toggle-row">
-        <div>
-          <div class="toggle-label">Skip duplicate songs in CSV</div>
-          <div class="toggle-desc">If the same song appears more than once in your Shazam export, only add it once</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="skip_duplicates" {% if cfg.skip_duplicates %}checked{% endif %} />
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-
-      <div class="toggle-row">
-        <div>
-          <div class="toggle-label">Remove all duplicates from playlist</div>
-          <div class="toggle-desc">
-            After adding songs, scan the entire playlist and remove any duplicate tracks,
-            keeping only the first occurrence of each song
-          </div>
-        </div>
-        <label class="toggle toggle-red">
-          <input type="checkbox" id="remove_duplicates"
-                 {% if cfg.remove_duplicates %}checked{% endif %}
-                 onchange="toggleRemoveDupesWarning(this.checked)" />
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      <div id="remove-dupes-warning" class="warn-banner {% if not cfg.remove_duplicates %}hidden{% endif %}">
+      <div id="remove-dupes-warning" class="warn-banner {% if cfg.get('dupes_mode','skip') != 'remove' %}hidden{% endif %}">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        This will permanently delete duplicate tracks from your Spotify playlist. This cannot be undone.
+        "Skip + clean playlist after" will permanently delete duplicate tracks from your Spotify playlist. This cannot be undone.
       </div>
     </div>
 
@@ -495,6 +495,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     setupDragDrop();
     updateStartButton();
+    loadPlaylists();
     {% if request.args.get('auth') == 'success' %}
     checkAuth();
     {% endif %}
@@ -502,17 +503,16 @@
 
   // ── Config ─────────────────────────────────────────────────────────────────
   async function saveConfig() {
+    const plNameEl = document.getElementById('playlist_name');
     const data = {
-      client_id:        document.getElementById('client_id').value.trim(),
-      client_secret:    document.getElementById('client_secret').value.trim(),
-      redirect_uri:     document.getElementById('redirect_uri').value.trim(),
-      playlist_name:    document.getElementById('playlist_name').value.trim(),
-      open_browser:     document.getElementById('open_browser').checked,
-      public_playlist:  document.getElementById('public_playlist').checked,
-      skip_duplicates:  document.getElementById('skip_duplicates').checked,
-      remove_duplicates:document.getElementById('remove_duplicates').checked,
-      sync_mode:        document.getElementById('sync_mode').checked,
-      delay_ms:         parseInt(document.getElementById('delay_ms').value) || 500,
+      client_id:       document.getElementById('client_id').value.trim(),
+      client_secret:   document.getElementById('client_secret').value.trim(),
+      redirect_uri:    document.getElementById('redirect_uri').value.trim(),
+      playlist_name:   plNameEl ? plNameEl.value.trim() : '',
+      open_browser:    document.getElementById('open_browser').checked,
+      public_playlist: document.getElementById('public_playlist').checked,
+      dupes_mode:      document.getElementById('dupes_mode').value,
+      delay_ms:        parseInt(document.getElementById('delay_ms').value) || 500,
     };
     const res = await fetch('/save_config', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -534,8 +534,9 @@
     setTimeout(() => el.classList.add('hidden'), 4000);
   }
 
-  function toggleRemoveDupesWarning(show) {
-    document.getElementById('remove-dupes-warning').classList.toggle('hidden', !show);
+  function onDupesModeChange() {
+    const mode = document.getElementById('dupes_mode').value;
+    document.getElementById('remove-dupes-warning').classList.toggle('hidden', mode !== 'remove');
   }
 
   // ── Auth ───────────────────────────────────────────────────────────────────
@@ -563,6 +564,7 @@
       dot.className  = 'dot dot-green';
       text.textContent = `Connected as ${data.name}`;
       info.classList.remove('hidden');
+      loadPlaylists();
     } else {
       box.className  = 'auth-status no';
       dot.className  = 'dot dot-red';
@@ -665,15 +667,17 @@
     if (!loadedSongs.length) return;
     await saveConfig();
 
+    const sel      = document.getElementById('playlist_select');
+    const isNewPl  = document.getElementById('tab-new').classList.contains('active');
+    const plNameEl = document.getElementById('playlist_name');
     const payload = {
-      songs:            loadedSongs,
-      playlist_name:    document.getElementById('playlist_name').value.trim() || 'Shazam2Spotify',
-      open_browser:     document.getElementById('open_browser').checked,
-      public_playlist:  document.getElementById('public_playlist').checked,
-      skip_duplicates:  document.getElementById('skip_duplicates').checked,
-      remove_duplicates:document.getElementById('remove_duplicates').checked,
-      sync_mode:        document.getElementById('sync_mode').checked,
-      delay_ms:         parseInt(document.getElementById('delay_ms').value) || 500,
+      songs:           loadedSongs,
+      playlist_id:     isNewPl ? null : sel.value,
+      playlist_name:   plNameEl ? plNameEl.value.trim() || 'Shazam2Spotify' : 'Shazam2Spotify',
+      open_browser:    document.getElementById('open_browser').checked,
+      public_playlist: document.getElementById('public_playlist').checked,
+      dupes_mode:      document.getElementById('dupes_mode').value,
+      delay_ms:        parseInt(document.getElementById('delay_ms').value) || 500,
     };
 
     const res  = await fetch('/start_transfer', {
@@ -774,6 +778,48 @@
     document.getElementById('card-progress').classList.add('hidden');
     document.getElementById('start-btn').disabled = false;
     updateStartButton();
+  }
+
+  // ── Playlist selector ──────────────────────────────────────────────────────
+  function setPlaylistTab(tab) {
+    const isExisting = tab === 'existing';
+    document.getElementById('tab-existing').classList.toggle('active', isExisting);
+    document.getElementById('tab-new').classList.toggle('active', !isExisting);
+    document.getElementById('playlist-existing-panel').classList.toggle('hidden', !isExisting);
+    document.getElementById('playlist-new-panel').classList.toggle('hidden', isExisting);
+  }
+
+  async function loadPlaylists() {
+    const sel = document.getElementById('playlist_select');
+    sel.innerHTML = '<option value="" disabled selected>Loading…</option>';
+    try {
+      const res  = await fetch('/get_playlists');
+      const data = await res.json();
+      if (data.error) {
+        sel.innerHTML = '<option value="" disabled selected>— connect Spotify to load playlists —</option>';
+        return;
+      }
+      sel.innerHTML = '';
+      for (const pl of data.playlists) {
+        const opt = document.createElement('option');
+        opt.value = pl.id;
+        opt.textContent = pl.name + ' (' + pl.tracks + ' tracks)' + (pl.owned ? '' : ' [shared]');
+        sel.appendChild(opt);
+      }
+      // Pre-select by config playlist name; switch tab accordingly
+      const cfgName = {{ cfg.playlist_name | tojson }};
+      let matched = false;
+      for (const opt of sel.options) {
+        if (!opt.disabled && opt.textContent.startsWith(cfgName + ' (')) {
+          opt.selected = true;
+          matched = true;
+          break;
+        }
+      }
+      setPlaylistTab(matched ? 'existing' : 'new');
+    } catch(e) {
+      sel.innerHTML = '<option value="" disabled selected>— error loading playlists —</option>';
+    }
   }
 </script>
 </body>

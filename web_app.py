@@ -10,8 +10,10 @@ import io
 import json
 import os
 import queue
+import sys
 import threading
 import time
+import traceback
 import webbrowser
 
 from flask import (
@@ -28,8 +30,20 @@ for _env in ("SPOTIPY_CLIENT_ID", "SPOTIPY_CLIENT_SECRET", "SPOTIPY_REDIRECT_URI
              "SPOTIPY_CLIENT_USERNAME"):
     os.environ.pop(_env, None)
 
+DEBUG = "--debug" in sys.argv
+
 app = Flask(__name__)
 app.secret_key = "shazam2spotify-static-key-2024"   # static so sessions survive restarts
+
+if DEBUG:
+    @app.before_request
+    def _log_request():
+        print(f"[DEBUG] {request.method} {request.path}", flush=True)
+        if request.is_json and request.data:
+            try:
+                print(f"[DEBUG] body: {request.get_json()}", flush=True)
+            except Exception:
+                pass
 
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE   = os.path.join(BASE_DIR, "config.json")
@@ -47,16 +61,14 @@ shutdown_event   = threading.Event()
 # ── Config ────────────────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "client_id":         "",
-    "client_secret":     "",
-    "redirect_uri":      "http://127.0.0.1:5000/callback",
-    "playlist_name":     "Shazam2Spotify",
-    "open_browser":      True,
-    "public_playlist":   True,
-    "skip_duplicates":   True,
-    "remove_duplicates": False,
-    "sync_mode":         True,
-    "delay_ms":          500,
+    "client_id":     "",
+    "client_secret": "",
+    "redirect_uri":  "http://127.0.0.1:5000/callback",
+    "playlist_name": "Shazam2Spotify",
+    "open_browser":  True,
+    "public_playlist": True,
+    "dupes_mode":    "skip",   # "skip" | "remove" | "none"
+    "delay_ms":      500,
 }
 
 
@@ -206,34 +218,45 @@ def run_transfer(cfg, songs):
         user = sp.current_user()
         emit("status", {"msg": f"Logged in as {user['display_name']}", "type": "success"})
 
-        playlist_name = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
-        public        = cfg.get("public_playlist", True)
-        sync_mode     = cfg.get("sync_mode", True)
-        remove_dupes  = cfg.get("remove_duplicates", False)
-        skip_dupes    = cfg.get("skip_duplicates", True)
-        delay         = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
+        playlist_name   = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
+        playlist_id_cfg = cfg.get("playlist_id") or None
+        public          = cfg.get("public_playlist", True)
+        dupes_mode      = cfg.get("dupes_mode", "skip")   # "skip" | "remove" | "none"
+        skip_dupes      = dupes_mode in ("skip", "remove")
+        remove_dupes    = dupes_mode == "remove"
+        delay           = max(0.1, cfg.get("delay_ms", 500) / 1000.0)
 
         # Find or create playlist
-        existing = find_existing_playlist(sp, user["id"], playlist_name) if sync_mode else None
         is_new_playlist = False
-        if existing:
-            playlist_id  = existing["id"]
-            playlist_url = existing["external_urls"]["spotify"]
-            emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
+        if playlist_id_cfg:
+            playlist_id = playlist_id_cfg
+            try:
+                pl_info      = sp._get(f"playlists/{playlist_id}")
+                playlist_url  = pl_info["external_urls"]["spotify"]
+                playlist_name = pl_info["name"]
+            except Exception:
+                playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+            emit("status", {"msg": f"Using existing playlist '{playlist_name}'", "type": "info"})
         else:
-            # Use direct API call to /v1/me/playlists — works on all spotipy versions
-            playlist = sp._post(
-                "me/playlists",
-                payload={
-                    "name": playlist_name,
-                    "public": public,
-                    "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
-                }
-            )
-            playlist_id  = playlist["id"]
-            playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-            is_new_playlist = True
-            emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
+            existing = find_existing_playlist(sp, user["id"], playlist_name)
+            if existing:
+                playlist_id  = existing["id"]
+                playlist_url = existing["external_urls"]["spotify"]
+                emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
+            else:
+                # Use direct API call to /v1/me/playlists — works on all spotipy versions
+                playlist = sp._post(
+                    "me/playlists",
+                    payload={
+                        "name": playlist_name,
+                        "public": public,
+                        "description": "Created by Shazam2Spotify — github.com/dairyking98/Shazam2Spotify",
+                    }
+                )
+                playlist_id  = playlist["id"]
+                playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+                is_new_playlist = True
+                emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
         # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
@@ -338,16 +361,14 @@ def save_config_route():
             os.remove(CACHE_FILE)
 
     old_cfg.update({
-        "client_id":         new_id,
-        "client_secret":     data.get("client_secret", old_cfg["client_secret"]).strip(),
-        "redirect_uri":      new_uri,
-        "playlist_name":     data.get("playlist_name", old_cfg["playlist_name"]).strip() or "Shazam2Spotify",
-        "open_browser":      bool(data.get("open_browser", old_cfg["open_browser"])),
-        "public_playlist":   bool(data.get("public_playlist", old_cfg["public_playlist"])),
-        "skip_duplicates":   bool(data.get("skip_duplicates", old_cfg["skip_duplicates"])),
-        "remove_duplicates": bool(data.get("remove_duplicates", old_cfg["remove_duplicates"])),
-        "sync_mode":         bool(data.get("sync_mode", old_cfg["sync_mode"])),
-        "delay_ms":          int(data.get("delay_ms", old_cfg["delay_ms"])),
+        "client_id":     new_id,
+        "client_secret": data.get("client_secret", old_cfg.get("client_secret", "")).strip(),
+        "redirect_uri":  new_uri,
+        "playlist_name": data.get("playlist_name", old_cfg.get("playlist_name", "Shazam2Spotify")).strip() or "Shazam2Spotify",
+        "open_browser":  bool(data.get("open_browser", old_cfg.get("open_browser", True))),
+        "public_playlist": bool(data.get("public_playlist", old_cfg.get("public_playlist", True))),
+        "dupes_mode":    data.get("dupes_mode", old_cfg.get("dupes_mode", "skip")),
+        "delay_ms":      int(data.get("delay_ms", old_cfg.get("delay_ms", 500))),
     })
     write_config(old_cfg)
     return jsonify({"ok": True})
@@ -392,6 +413,44 @@ def check_auth():
         return jsonify({"authenticated": True, "name": user.get("display_name", "Unknown")})
     except Exception:
         return jsonify({"authenticated": False})
+
+
+@app.route("/get_playlists")
+def get_playlists():
+    cfg = load_config()
+    if DEBUG:
+        print(f"[DEBUG] get_playlists: cache={os.path.exists(CACHE_FILE)} client_id={bool(cfg.get('client_id'))}", flush=True)
+    if not os.path.exists(CACHE_FILE) or not cfg.get("client_id"):
+        return jsonify({"error": "Not authenticated"}), 401
+    try:
+        sp   = make_sp(cfg)
+        user = sp.current_user()
+        uid  = user["id"]
+        if DEBUG:
+            print(f"[DEBUG] get_playlists: logged in as {user.get('display_name')} ({uid})", flush=True)
+        playlists = []
+        offset = 0
+        while True:
+            results = sp._get("me/playlists", limit=50, offset=offset)
+            for pl in results.get("items", []) or []:
+                playlists.append({
+                    "id":     pl["id"],
+                    "name":   pl["name"],
+                    "tracks": (pl.get("items") or pl.get("tracks") or {}).get("total", 0),
+                    "owned":  pl["owner"]["id"] == uid,
+                })
+            if results.get("next"):
+                offset += 50
+            else:
+                break
+        if DEBUG:
+            print(f"[DEBUG] get_playlists: returning {len(playlists)} playlists", flush=True)
+        return jsonify({"playlists": playlists})
+    except Exception as e:
+        if DEBUG:
+            traceback.print_exc()
+        print(f"[ERROR] get_playlists: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/test_add_track")
@@ -481,8 +540,8 @@ def start_transfer():
         return jsonify({"error": "No songs to transfer"}), 400
     cfg = load_config()
     # Override with values sent from UI
-    for key in ("playlist_name", "open_browser", "public_playlist",
-                "skip_duplicates", "remove_duplicates", "sync_mode", "delay_ms"):
+    for key in ("playlist_name", "playlist_id", "open_browser", "public_playlist",
+                "dupes_mode", "delay_ms"):
         if key in data:
             cfg[key] = data[key]
     transfer_queue   = queue.Queue()
@@ -525,11 +584,17 @@ if __name__ == "__main__":
         write_config(dict(DEFAULTS))
         print(f"  Created config.json — fill in your Client ID and Secret.")
 
+    debug_tag = "  *** DEBUG MODE — requests and errors logged ***\n" if DEBUG else ""
     print("\n" + "=" * 55)
     print("  Shazam2Spotify Web Interface")
     print("  Open your browser at: http://127.0.0.1:5000")
     print("  Press Ctrl+C to stop")
-    print("=" * 55 + "\n")
+    if DEBUG:
+        print("  Debug: python web_app.py --debug")
+    print("=" * 55)
+    if debug_tag:
+        print(debug_tag, end="")
+    print()
 
     # Use waitress (production WSGI server) — handles Ctrl+C cleanly
     try:
