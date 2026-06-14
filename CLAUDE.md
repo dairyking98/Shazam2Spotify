@@ -1,0 +1,83 @@
+# CLAUDE.md
+
+## What this project is
+
+Local Flask web app that transfers a Shazam library CSV to a Spotify playlist. Runs at http://127.0.0.1:5000. Single-user, no database.
+
+## Running
+
+```bash
+python web_app.py
+python web_app.py --debug    # verbose request/error logging to terminal
+```
+
+## File map
+
+| File | Role |
+|---|---|
+| `web_app.py` | The entire backend — Flask routes, transfer logic, Spotify API calls |
+| `templates/index.html` | Single Jinja2 template; all JS is inline at the bottom |
+| `config.json` | User credentials and preferences (tracked with blank values) |
+| `.cache` | Spotipy auth token cache — gitignored, never commit |
+| `shazam2spotify.py` | Older CLI-only script, mostly superseded by the web app |
+| `app.py` | Obfuscated legacy file from the original repo — ignore it |
+
+## Architecture
+
+- Transfer runs in a background thread (`run_transfer`), puts events on a `queue.Queue`
+- `/stream` route reads the queue and pushes Server-Sent Events to the browser
+- Spotify auth via spotipy + SpotifyOAuth; token cached in `.cache`
+- No session state between requests — everything lives in globals or config
+
+## Key functions in web_app.py
+
+| Function | What it does |
+|---|---|
+| `run_transfer(cfg, songs)` | Background worker: pre-screens, searches Spotify, adds tracks, emits SSE events |
+| `get_all_playlist_track_ids(sp, playlist_id)` | Bulk-fetches all tracks; returns `(ids_set, by_name_dict)` where `by_name_dict = {(norm_title, norm_artist): (tid, name, artist)}` |
+| `_norm(s)` | Lowercases and strips non-alphanumeric for pre-screen comparisons |
+| `find_existing_playlist(sp, user_id, name)` | Finds a playlist by name when no ID is provided |
+| `remove_playlist_duplicates(sp, playlist_id)` | Scans and removes duplicate tracks from a playlist |
+
+## Config schema
+
+```json
+{
+  "client_id": "",
+  "client_secret": "",
+  "redirect_uri": "http://127.0.0.1:5000/callback",
+  "playlist_name": "Shazam2Spotify",
+  "public_playlist": true,
+  "dupes_mode": "skip",
+  "delay_ms": 500
+}
+```
+
+`dupes_mode`: `"skip"` | `"remove"` | `"none"`
+
+## Spotify API notes (Feb 2026 breaking changes)
+
+- All playlist track endpoints use `/items` instead of `/tracks` (renamed Feb 2026)
+- The simplified playlist object uses `items.total` instead of `tracks.total`
+- Avoid spotipy's high-level playlist methods — use `sp._get()`, `sp._post()`, `sp._delete()` directly to bypass version-specific wrappers
+
+## Frontend state (index.html)
+
+| Variable | Contents |
+|---|---|
+| `loadedSongs` | `[[title, artist], ...]` from parsed CSV |
+| `rawCsvRows` | `{ headers: [...], rows: [[...], ...] }` — full CSV for report export |
+| `transferResults` | Array indexed by song position; populated during SSE stream for export |
+| `eventSource` | The active `EventSource` for `/stream` |
+
+Key JS functions: `setPlaylistTab('existing'|'new')`, `loadPlaylists()`, `startTransfer()`, `downloadReport()`, `downloadNotFound()`.
+
+## Pre-screening (performance)
+
+On re-transfer to a playlist that already has all the songs, the app skips the Spotify search entirely for matched songs. `get_all_playlist_track_ids` returns a `by_name` dict keyed on `(_norm(title), _norm(artist))`. The transfer loop checks this dict before calling `sp.search()`. False negatives (title mismatches) fall back to the normal search path.
+
+## What not to do
+
+- Do not use spotipy high-level methods for playlist operations — they break against the Feb 2026 API
+- Do not commit `config.json` with real credentials or `.cache`
+- Do not add `open_browser` back — the toggle was removed; there is an "Open Playlist in Spotify" button in the done UI instead
