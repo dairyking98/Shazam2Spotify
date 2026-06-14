@@ -828,10 +828,15 @@
     const { headers, rows } = rawCsvRows;
     const outHeaders = [...headers, 'Transfer Status', 'Notes'];
     const lines = [outHeaders.map(csvEscape).join(',')];
+    const seen  = new Set();
     rows.forEach((row, idx) => {
       const r = transferResults[idx] || {};
       if (r.status !== 'notfound') return;
-      lines.push([...row, 'Not found on Spotify', r.msg || ''].map(csvEscape).join(','));
+      // Deduplicate by normalized title+artist so repeated CSV entries appear once
+      const key = ((row[2] || '') + '|' + (row[3] || '')).toLowerCase().trim();
+      if (seen.has(key)) return;
+      seen.add(key);
+      lines.push([...row, r.msg || 'Not found on Spotify', ''].map(csvEscape).join(','));
     });
     if (lines.length === 1) { alert('No songs were missing from Spotify in this transfer.'); return; }
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });

@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import traceback
+import unicodedata
 import webbrowser
 
 from flask import (
@@ -106,8 +107,131 @@ def make_sp(cfg):
     return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
 
 
+# ── Search helpers ────────────────────────────────────────────────────────────
+
 def _norm(s):
     return re.sub(r'[^a-z0-9]', '', s.lower())
+
+# Matches "(feat. X)", "(ft. X)", "(featuring X)" including brackets
+_FEAT_RE = re.compile(
+    r'\s*[\(\[]\s*f(?:ea)?t\.?\s+([^\)\]]+)[\)\]]',
+    re.IGNORECASE,
+)
+# Matches version/mix/remix qualifiers in parens or brackets, including
+# named-person mixes like "(Adam K & Soha Vocal Mix)" or "[Nia Archives Remix]"
+_VERSION_RE = re.compile(
+    r'\s*[\(\[]\s*(?:'
+    r'[^)\]]*\b(?:mix|edit|remix|version|rework|flip|mashup|dub)\b[^)\]]*'
+    r'|extended(?:\s+mix)?|club\s+mix|radio\s+edit|remaster(?:ed)?(?:\s+\d+)?'
+    r'|original\s+mix|instrumental|acoustic|live(?:\s+version)?|vip(?:\s+mix)?'
+    r'|reprise|bonus(?:\s+track)?|deluxe|mixed|clean(?:\s+version)?'
+    r')\s*[\)\]]',
+    re.IGNORECASE,
+)
+# Split compound artists on " & ", " vs ", " x " but NOT on "/" (risks "AC/DC")
+_ARTIST_SPLIT_RE = re.compile(r'\s+&\s+|\s+vs\.?\s+|\s+x\s+|,\s+', re.IGNORECASE)
+
+
+def fix_mojibake(s):
+    """Recover UTF-8 text that was incorrectly decoded as Latin-1 (common in Shazam exports)."""
+    try:
+        return s.encode('latin-1').decode('utf-8')
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return s
+
+
+def _extract_featured(title):
+    """Strip (feat. X) from title, return (clean_title, [featured_names])."""
+    featured = []
+    for m in _FEAT_RE.finditer(title):
+        featured.extend(p.strip() for p in re.split(r'\s*[&,]\s*', m.group(1)) if p.strip())
+    return _FEAT_RE.sub('', title).strip(), featured
+
+
+def _strip_version(title):
+    """Remove version/mix/remix qualifiers from title."""
+    return _VERSION_RE.sub('', title).strip()
+
+
+def _split_artists(artist):
+    """Split 'DRS & LSB' → ['DRS', 'LSB']. Conservative: ignores '/' to protect 'AC/DC'."""
+    parts = _ARTIST_SPLIT_RE.split(artist)
+    return [p.strip() for p in parts if p.strip()] or [artist]
+
+
+def _clean_text(s):
+    """Lowercase, remove accents, strip punctuation — for last-resort normalization."""
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[''`]", '', s.lower())
+    s = re.sub(r'[^\w\s]', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def _plausible(csv_title, track):
+    """Sanity-check a broad search result: at least one significant word must appear in the track name."""
+    sp_name = _clean_text(track.get('name', ''))
+    words = [w for w in _clean_text(csv_title).split() if len(w) > 3]
+    return not words or any(w in sp_name for w in words)
+
+
+def search_track(sp, title, artist):
+    """
+    Progressive 5-stage Spotify search pipeline.
+    Returns (track_dict, stage_int) on success, or (None, 'multi'|None) on failure.
+
+    Stage 1 — strict field operators: track:{title} artist:{artist}
+    Stage 2 — free-text: {title} {artist}  (Spotify handles fuzzy ranking)
+    Stage 3 — strip (feat. X) from title, try each primary/featured artist
+    Stage 4 — strip version/mix/remix qualifiers, try each artist
+    Stage 5 — full unicode normalization + accent removal
+    """
+    # Multi-track medley/DJ-mix segments (e.g. "Track A / Track B / Track C")
+    if re.search(r' / ', title):
+        return None, 'multi'
+
+    title  = fix_mojibake(title)
+    artist = fix_mojibake(artist)
+
+    def _q(q):
+        r = sp.search(q=q, type='track', limit=1)
+        items = r['tracks']['items']
+        return items[0] if items else None
+
+    # Stage 1 — strict
+    if t := _q(f'track:{title} artist:{artist}'):
+        return t, 1
+
+    # Stage 2 — free-text
+    if (t := _q(f'{title} {artist}')) and _plausible(title, t):
+        return t, 2
+
+    # Stage 3 — remove (feat. X) from title, try each artist variant
+    clean_title, featured = _extract_featured(title)
+    all_artists = _split_artists(artist) + featured
+    if clean_title != title:
+        if (t := _q(f'{clean_title} {artist}')) and _plausible(clean_title, t):
+            return t, 3
+        for a in all_artists:
+            if (t := _q(f'{clean_title} {a}')) and _plausible(clean_title, t):
+                return t, 3
+
+    # Stage 4 — also strip version/mix/remix qualifiers
+    base = _strip_version(clean_title or title)
+    if base and base != (clean_title or title):
+        if (t := _q(f'{base} {artist}')) and _plausible(base, t):
+            return t, 4
+        for a in all_artists:
+            if (t := _q(f'{base} {a}')) and _plausible(base, t):
+                return t, 4
+
+    # Stage 5 — full text normalization (accents, punctuation)
+    norm_t = _clean_text(base or clean_title or title)
+    norm_a = _clean_text(artist)
+    if norm_t and (t := _q(f'{norm_t} {norm_a}')) and _plausible(norm_t, t):
+        return t, 5
+
+    return None, None
 
 
 def get_all_playlist_track_ids(sp, playlist_id):
@@ -307,12 +431,11 @@ def run_transfer(cfg, songs):
                                       "title": m_name, "artist": m_art, "msg": "Already in playlist"})
                     continue
 
-                results = sp.search(q=f"track:{title} artist:{artist}", type="track", limit=1)
-                tracks  = results["tracks"]["items"]
-                if tracks:
-                    tid     = tracks[0]["id"]
-                    tname   = tracks[0]["name"]
-                    tartist = tracks[0]["artists"][0]["name"]
+                track, stage = search_track(sp, title, artist)
+                if track:
+                    tid     = track["id"]
+                    tname   = track["name"]
+                    tartist = track["artists"][0]["name"]
                     if tid in existing_ids:
                         skipped += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
@@ -322,17 +445,19 @@ def run_transfer(cfg, songs):
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
-                        # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
                         sp._post(f"playlists/{playlist_id}/items", payload={"uris": [f"spotify:track:{tid}"]})
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
+                        add_msg = "Added" if stage == 1 else f"Added (matched via stage {stage})"
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "added",
-                                      "title": tname, "artist": tartist, "msg": "Added"})
+                                      "title": tname, "artist": tartist, "msg": add_msg})
                 else:
+                    reason = ("Multi-track / medley — skipped" if stage == 'multi'
+                              else "Not found on Spotify")
                     not_found.append(f"{title} — {artist}")
                     emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "notfound",
-                                  "title": title, "artist": artist, "msg": "Not found on Spotify"})
+                                  "title": title, "artist": artist, "msg": reason})
                 time.sleep(delay)
             except Exception as e:
                 emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
