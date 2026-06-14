@@ -743,7 +743,7 @@
       document.getElementById('progress-count').textContent = `${d.i} / ${d.total}`;
       document.getElementById('progress-label').textContent = `${d.title} — ${d.artist}`;
       addLog(`${d.title} — ${d.artist}`, d.status, d.msg);
-      transferResults[d.i - 1] = {
+      transferResults[d.csv_idx] = {
         status:        d.status,
         spotifyTitle:  d.status !== 'notfound' ? d.title  : '',
         spotifyArtist: d.status !== 'notfound' ? d.artist : '',

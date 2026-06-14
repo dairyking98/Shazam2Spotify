@@ -264,6 +264,10 @@ def run_transfer(cfg, songs):
                 emit("status", {"msg": f"Created new playlist '{playlist_name}'", "type": "success"})
         emit("playlist", {"url": playlist_url})
 
+        # Reverse so oldest Shazam entries (bottom of CSV) are added first;
+        # new entries (top of CSV) then append to the playlist end on re-runs
+        songs = list(reversed(songs))
+
         # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
         if is_new_playlist:
             existing_ids, existing_by_name = set(), {}
@@ -285,6 +289,8 @@ def run_transfer(cfg, songs):
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
                 break
+            # csv_idx: 0-based index into the original (unreversed) CSV rows for report alignment
+            csv_idx = total - i
             try:
                 # Pre-screen: if normalized title+artist matches a track already in the playlist,
                 # skip the Spotify search entirely to save API calls on re-transfers
@@ -293,11 +299,11 @@ def run_transfer(cfg, songs):
                     m_tid, m_name, m_art = pre
                     if skip_dupes and m_tid in session_ids:
                         csv_dupes += 1
-                        emit("song", {"i": i, "total": total, "status": "duplicate",
+                        emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
                                       "title": m_name, "artist": m_art, "msg": "Duplicate in CSV"})
                     else:
                         skipped += 1
-                        emit("song", {"i": i, "total": total, "status": "skipped",
+                        emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
                                       "title": m_name, "artist": m_art, "msg": "Already in playlist"})
                     continue
 
@@ -309,11 +315,11 @@ def run_transfer(cfg, songs):
                     tartist = tracks[0]["artists"][0]["name"]
                     if tid in existing_ids:
                         skipped += 1
-                        emit("song", {"i": i, "total": total, "status": "skipped",
+                        emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
                                       "title": tname, "artist": tartist, "msg": "Already in playlist"})
                     elif skip_dupes and tid in session_ids:
                         csv_dupes += 1
-                        emit("song", {"i": i, "total": total, "status": "duplicate",
+                        emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
                         # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
@@ -321,15 +327,15 @@ def run_transfer(cfg, songs):
                         session_ids.add(tid)
                         existing_ids.add(tid)
                         added += 1
-                        emit("song", {"i": i, "total": total, "status": "added",
+                        emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "added",
                                       "title": tname, "artist": tartist, "msg": "Added"})
                 else:
                     not_found.append(f"{title} — {artist}")
-                    emit("song", {"i": i, "total": total, "status": "notfound",
+                    emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "notfound",
                                   "title": title, "artist": artist, "msg": "Not found on Spotify"})
                 time.sleep(delay)
             except Exception as e:
-                emit("song", {"i": i, "total": total, "status": "error",
+                emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
                               "title": title, "artist": artist, "msg": str(e)})
                 time.sleep(1)
 
