@@ -25,14 +25,32 @@ Transfer your entire Shazam library to a Spotify playlist via a local web UI.
 
 ## Installation
 
+### Linux
+
 ```bash
 git clone https://github.com/dairyking98/Shazam2Spotify.git
 cd Shazam2Spotify
-pip install -r requirements.txt
-python web_app.py
+chmod +x install.sh
+./install.sh
 ```
 
-Open **http://127.0.0.1:5000** in your browser.
+Then start the app any time with:
+
+```bash
+./run.sh
+```
+
+### Windows
+
+1. Install [Python 3.9+](https://www.python.org/downloads/) — check **"Add Python to PATH"** during setup
+2. Clone or download this repo and open the folder
+3. Double-click **`install.bat`**
+
+Then start the app any time by double-clicking **`run.bat`**.
+
+---
+
+Open **http://127.0.0.1:5000** in your browser after starting the app.
 
 ---
 
@@ -131,7 +149,11 @@ Three buttons appear when the transfer completes:
 ## Debug mode
 
 ```bash
-python web_app.py --debug
+# Linux
+./run.sh --debug
+
+# Windows
+run.bat --debug
 ```
 
 Logs every request path and JSON body to the terminal, and prints full tracebacks on errors.
