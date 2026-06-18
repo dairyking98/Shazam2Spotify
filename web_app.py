@@ -622,7 +622,7 @@ def spotify_callback():
         return "<h2>No code received.</h2><p><a href='/'>Go back</a></p>"
     cfg = load_config()
     try:
-        make_auth_manager(cfg).get_access_token(code)
+        make_auth_manager(cfg).get_access_token(code, as_dict=False)
     except Exception as e:
         return f"<h2>Auth failed: {e}</h2><p><a href='/'>Go back</a></p>"
     return redirect(url_for("index") + "?auth=success")
