@@ -175,7 +175,18 @@ def _plausible(csv_title, track):
     return not words or any(w in sp_name for w in words)
 
 
-def search_track(sp, title, artist):
+def _handle_429(e):
+    """Return seconds to sleep given a SpotifyException with http_status 429."""
+    retry_after = 10
+    try:
+        if hasattr(e, 'headers') and e.headers:
+            retry_after = int(e.headers.get('Retry-After', 10))
+    except Exception:
+        pass
+    return retry_after + 2
+
+
+def search_track(sp, title, artist, inter_stage_delay=0.0):
     """
     Progressive 5-stage Spotify search pipeline.
     Returns (track_dict, stage_int) on success, or (None, 'multi'|None) on failure.
@@ -185,18 +196,32 @@ def search_track(sp, title, artist):
     Stage 3 — strip (feat. X) from title, try each primary/featured artist
     Stage 4 — strip version/mix/remix qualifiers, try each artist
     Stage 5 — full unicode normalization + accent removal
+
+    inter_stage_delay: seconds to sleep before each retry call (not before the first).
     """
-    # Multi-track medley/DJ-mix segments (e.g. "Track A / Track B / Track C")
     if re.search(r' / ', title):
         return None, 'multi'
 
     title  = fix_mojibake(title)
     artist = fix_mojibake(artist)
+    first_call = True
 
     def _q(q):
-        r = sp.search(q=q, type='track', limit=1)
-        items = r['tracks']['items']
-        return items[0] if items else None
+        nonlocal first_call
+        if not first_call and inter_stage_delay:
+            time.sleep(inter_stage_delay)
+        first_call = False
+        for attempt in range(3):
+            try:
+                r = sp.search(q=q, type='track', limit=1)
+                items = r['tracks']['items']
+                return items[0] if items else None
+            except spotipy.SpotifyException as e:
+                if e.http_status == 429:
+                    time.sleep(_handle_429(e))
+                    continue
+                raise
+        return None
 
     # Stage 1 — strict
     if t := _q(f'track:{title} artist:{artist}'):
@@ -208,11 +233,12 @@ def search_track(sp, title, artist):
 
     # Stage 3 — remove (feat. X) from title, try each artist variant
     clean_title, featured = _extract_featured(title)
-    all_artists = _split_artists(artist) + featured
+    # Only try artists not already queried as `artist` to avoid duplicate API calls
+    extra_artists = [a for a in (_split_artists(artist) + featured) if _norm(a) != _norm(artist)]
     if clean_title != title:
         if (t := _q(f'{clean_title} {artist}')) and _plausible(clean_title, t):
             return t, 3
-        for a in all_artists:
+        for a in extra_artists:
             if (t := _q(f'{clean_title} {a}')) and _plausible(clean_title, t):
                 return t, 3
 
@@ -221,7 +247,7 @@ def search_track(sp, title, artist):
     if base and base != (clean_title or title):
         if (t := _q(f'{base} {artist}')) and _plausible(base, t):
             return t, 4
-        for a in all_artists:
+        for a in extra_artists:
             if (t := _q(f'{base} {a}')) and _plausible(base, t):
                 return t, 4
 
@@ -271,14 +297,13 @@ def find_existing_playlist(sp, user_id, name):
     return None
 
 
-def remove_playlist_duplicates(sp, playlist_id):
+def remove_playlist_duplicates(sp, playlist_id, delay=0.5):
     # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     items = []
     offset = 0
     while True:
         results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
         for item in results.get("items", []):
-            # Feb 2026: field renamed from 'track' to 'item'
             track = item.get("track") or item.get("item") if item else None
             if track and track.get("id"):
                 items.append({"id": track["id"], "uri": track["uri"]})
@@ -299,13 +324,20 @@ def remove_playlist_duplicates(sp, playlist_id):
     removed = 0
     for uri, positions in uri_positions.items():
         for pos in sorted(positions, reverse=True):
-            # Use /items endpoint for DELETE too
-            sp._delete(
-                f"playlists/{playlist_id}/items",
-                payload={"items": [{"uri": uri, "positions": [pos]}]}
-            )
+            for attempt in range(3):
+                try:
+                    sp._delete(
+                        f"playlists/{playlist_id}/items",
+                        payload={"items": [{"uri": uri, "positions": [pos]}]}
+                    )
+                    break
+                except spotipy.SpotifyException as e:
+                    if e.http_status == 429:
+                        time.sleep(_handle_429(e))
+                        continue
+                    raise
             removed += 1
-            time.sleep(0.2)
+            time.sleep(delay)
     return removed
 
 
@@ -410,14 +442,52 @@ def run_transfer(cfg, songs):
         added = skipped = csv_dupes = 0
         not_found = []
 
+        # Batch pending adds — flushed every ADD_BATCH tracks or at end of loop.
+        # Spotify allows up to 100 URIs per POST; batching cuts add calls by ~50-100x.
+        ADD_BATCH = 50
+        to_add    = []  # list of {uri, i, csv_idx, tname, tartist, stage}
+
+        def flush_adds():
+            nonlocal added
+            if not to_add:
+                return
+            uris = [item['uri'] for item in to_add]
+            for attempt in range(3):
+                try:
+                    sp._post(f"playlists/{playlist_id}/items", payload={"uris": uris})
+                    break
+                except spotipy.SpotifyException as e:
+                    if e.http_status == 429:
+                        wait = _handle_429(e)
+                        emit("status", {"msg": f"Rate limited — waiting {wait}s before retrying add...", "type": "info"})
+                        time.sleep(wait)
+                        continue
+                    for item in to_add:
+                        emit("song", {"i": item['i'], "total": total, "csv_idx": item['csv_idx'],
+                                      "status": "error", "title": item['tname'], "artist": item['tartist'],
+                                      "msg": f"Add failed: {e}"})
+                    to_add.clear()
+                    return
+                except Exception as e:
+                    for item in to_add:
+                        emit("song", {"i": item['i'], "total": total, "csv_idx": item['csv_idx'],
+                                      "status": "error", "title": item['tname'], "artist": item['tartist'],
+                                      "msg": f"Add failed: {e}"})
+                    to_add.clear()
+                    return
+            for item in to_add:
+                add_msg = "Added" if item['stage'] == 1 else f"Added (matched via stage {item['stage']})"
+                emit("song", {"i": item['i'], "total": total, "csv_idx": item['csv_idx'],
+                              "status": "added", "title": item['tname'], "artist": item['tartist'],
+                              "msg": add_msg})
+                added += 1
+            to_add.clear()
+
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
                 break
-            # csv_idx: 0-based index into the original (unreversed) CSV rows for report alignment
             csv_idx = total - i
             try:
-                # Pre-screen: if normalized title+artist matches a track already in the playlist,
-                # skip the Spotify search entirely to save API calls on re-transfers
                 pre = existing_by_name.get((_norm(title), _norm(artist)))
                 if pre:
                     m_tid, m_name, m_art = pre
@@ -431,7 +501,7 @@ def run_transfer(cfg, songs):
                                       "title": m_name, "artist": m_art, "msg": "Already in playlist"})
                     continue
 
-                track, stage = search_track(sp, title, artist)
+                track, stage = search_track(sp, title, artist, delay)
                 if track:
                     tid     = track["id"]
                     tname   = track["name"]
@@ -445,13 +515,14 @@ def run_transfer(cfg, songs):
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
                                       "title": tname, "artist": tartist, "msg": "Duplicate in CSV"})
                     else:
-                        sp._post(f"playlists/{playlist_id}/items", payload={"uris": [f"spotify:track:{tid}"]})
                         session_ids.add(tid)
                         existing_ids.add(tid)
-                        added += 1
-                        add_msg = "Added" if stage == 1 else f"Added (matched via stage {stage})"
-                        emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "added",
-                                      "title": tname, "artist": tartist, "msg": add_msg})
+                        to_add.append({
+                            'uri': f"spotify:track:{tid}", 'i': i, 'csv_idx': csv_idx,
+                            'tname': tname, 'tartist': tartist, 'stage': stage,
+                        })
+                        if len(to_add) >= ADD_BATCH:
+                            flush_adds()
                 else:
                     reason = ("Multi-track / medley — skipped" if stage == 'multi'
                               else "Not found on Spotify")
@@ -462,14 +533,16 @@ def run_transfer(cfg, songs):
             except Exception as e:
                 emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
                               "title": title, "artist": artist, "msg": str(e)})
-                time.sleep(1)
+                time.sleep(delay)
+
+        flush_adds()
 
         # Remove duplicates pass
         dupes_removed = 0
         if remove_dupes and not shutdown_event.is_set():
             emit("status", {"msg": "Scanning for duplicates to remove...", "type": "info"})
             try:
-                dupes_removed = remove_playlist_duplicates(sp, playlist_id)
+                dupes_removed = remove_playlist_duplicates(sp, playlist_id, delay)
                 emit("status", {"msg": f"Removed {dupes_removed} duplicate(s)", "type": "success"})
             except Exception as e:
                 emit("status", {"msg": f"Duplicate removal error: {e}", "type": "error"})
