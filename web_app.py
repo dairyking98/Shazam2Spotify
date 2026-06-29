@@ -487,11 +487,14 @@ def parse_shazam_csv(file_content):
 def run_transfer(cfg, songs):
     global transfer_running
 
+    api_calls    = [0]   # mutable so nested functions can increment
+
     def emit(event, data):
+        if event == "song":
+            data = {**data, "api_calls": api_calls[0]}
         transfer_queue.put({"event": event, "data": data})
 
     playlist_url = ""
-    api_calls    = [0]   # mutable so nested functions can increment
     start_time   = time.time()
     try:
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})

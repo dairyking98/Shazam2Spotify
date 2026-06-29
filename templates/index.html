@@ -483,10 +483,12 @@
     </div>
 
     <div id="transfer-meta" class="hidden" style="margin-top:10px; font-size:0.8rem; color:var(--text-muted)">
-      <span id="meta-api-calls" style="color:var(--text); font-weight:600"></span> API calls in
-      <span id="meta-elapsed" style="color:var(--text); font-weight:600"></span>s
-      &nbsp;·&nbsp;
-      <span id="meta-cache-hits" style="color:var(--purple); font-weight:600"></span> from cache
+      <span id="meta-api-calls" style="color:var(--text); font-weight:600">0</span> API calls
+      <span id="meta-done-suffix" class="hidden">
+        &nbsp;in <span id="meta-elapsed" style="color:var(--text); font-weight:600"></span>s
+        &nbsp;·&nbsp;
+        <span id="meta-cache-hits" style="color:var(--purple); font-weight:600"></span> from cache
+      </span>
     </div>
 
     <div id="done-actions" class="hidden" style="margin-top:16px">
@@ -824,6 +826,11 @@
     document.getElementById('stats-row').classList.add('hidden');
     document.getElementById('done-actions').classList.add('hidden');
     document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('meta-api-calls').textContent = '0';
+    document.getElementById('meta-elapsed').textContent = '';
+    document.getElementById('meta-cache-hits').textContent = '';
+    document.getElementById('meta-done-suffix').classList.add('hidden');
+    document.getElementById('transfer-meta').classList.remove('hidden');
 
     if (eventSource) eventSource.close();
     eventSource = new EventSource('/stream');
@@ -865,6 +872,10 @@
         spotifyArtist: d.status !== 'notfound' ? d.artist : '',
         msg:           d.msg || '',
       };
+      if (d.api_calls != null) {
+        document.getElementById('meta-api-calls').textContent = d.api_calls;
+        document.getElementById('transfer-meta').classList.remove('hidden');
+      }
     }
 
     if (msg.event === 'done') {
@@ -881,6 +892,7 @@
       document.getElementById('meta-api-calls').textContent  = d.api_calls;
       document.getElementById('meta-elapsed').textContent    = d.elapsed_s;
       document.getElementById('meta-cache-hits').textContent = d.cache_hits ?? 0;
+      document.getElementById('meta-done-suffix').classList.remove('hidden');
       document.getElementById('transfer-meta').classList.remove('hidden');
       document.getElementById('done-actions').classList.remove('hidden');
       let summary = `Done! ${d.added} added`;
