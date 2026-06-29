@@ -110,7 +110,9 @@ def make_auth_manager(cfg):
 
 
 def make_sp(cfg):
-    return spotipy.Spotify(auth_manager=make_auth_manager(cfg))
+    # retries=0 disables spotipy's built-in Retry-After sleep (which can be
+    # 84000+ seconds). We handle 429s ourselves with a capped delay.
+    return spotipy.Spotify(auth_manager=make_auth_manager(cfg), retries=0)
 
 
 # ── Search helpers ────────────────────────────────────────────────────────────
@@ -223,6 +225,8 @@ def _plausible(csv_title, track):
     return not words or any(w in sp_name for w in words)
 
 
+MAX_RETRY_WAIT = 60   # never sleep longer than this on a 429
+
 def _handle_429(e):
     """Return seconds to sleep given a SpotifyException with http_status 429."""
     retry_after = 10
@@ -231,7 +235,7 @@ def _handle_429(e):
             retry_after = int(e.headers.get('Retry-After', 10))
     except Exception:
         pass
-    return retry_after + 2
+    return min(retry_after + 2, MAX_RETRY_WAIT)
 
 
 def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None):
@@ -558,6 +562,7 @@ def run_transfer(cfg, songs):
 
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
+                save_song_cache(song_cache)
                 break
             csv_idx = total - i
             try:
@@ -682,6 +687,9 @@ def run_transfer(cfg, songs):
                 emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
                               "title": title, "artist": artist, "msg": str(e)})
                 time.sleep(delay)
+
+            if i % 50 == 0:
+                save_song_cache(song_cache)
 
         flush_adds()
         save_song_cache(song_cache)
