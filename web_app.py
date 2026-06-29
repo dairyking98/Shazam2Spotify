@@ -238,7 +238,7 @@ def _handle_429(e):
     return min(retry_after + 2, MAX_RETRY_WAIT)
 
 
-def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None):
+def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None, emit_fn=None):
     """
     Progressive 5-stage Spotify search pipeline.
     Returns (track_dict, stage_int) on success, or (None, 'multi'|None) on failure.
@@ -251,6 +251,7 @@ def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None):
 
     inter_stage_delay: seconds to sleep before each retry call (not before the first).
     call_counter: optional [int] list; incremented once per API call made.
+    emit_fn: optional emit(event, data) callable; used to surface 429 warnings.
     """
     if re.search(r' / ', title):
         return None, 'multi'
@@ -273,7 +274,21 @@ def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None):
                 return items[0] if items else None
             except spotipy.SpotifyException as e:
                 if e.http_status == 429:
-                    time.sleep(_handle_429(e))
+                    raw_after = 10
+                    try:
+                        if hasattr(e, 'headers') and e.headers:
+                            raw_after = int(e.headers.get('Retry-After', 10))
+                    except Exception:
+                        pass
+                    wait = min(raw_after + 2, MAX_RETRY_WAIT)
+                    if emit_fn:
+                        emit_fn("status", {
+                            "msg": f"Rate limited — Spotify requests {raw_after}s wait, retrying in {wait}s (attempt {attempt + 1}/3)",
+                            "type": "error",
+                        })
+                    time.sleep(wait)
+                    if attempt == 2:
+                        raise  # all 3 attempts rate-limited — propagate so song isn't cached
                     continue
                 raise
         return None
@@ -647,7 +662,7 @@ def run_transfer(cfg, songs):
 
                 # ── Spotify API search ──────────────────────────────────────
                 emit("status", {"msg": f"Searching: {title} — {artist}", "type": "info"})
-                track, stage = search_track(sp, title, artist, delay, api_calls)
+                track, stage = search_track(sp, title, artist, delay, api_calls, emit)
                 if track:
                     tid     = track["id"]
                     tname   = track["name"]
@@ -682,6 +697,20 @@ def run_transfer(cfg, songs):
                     not_found.append(f"{title} — {artist}")
                     emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "notfound",
                                   "title": title, "artist": artist, "msg": reason})
+                time.sleep(delay)
+            except spotipy.SpotifyException as e:
+                if e.http_status == 429:
+                    save_song_cache(song_cache)
+                    emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
+                                  "title": title, "artist": artist,
+                                  "msg": "Rate limited — not cached, will retry on re-run"})
+                    emit("status", {
+                        "msg": "Spotify rate limit reached. Cache saved — re-run transfer to resume (cached songs will be skipped instantly).",
+                        "type": "error",
+                    })
+                else:
+                    emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
+                                  "title": title, "artist": artist, "msg": str(e)})
                 time.sleep(delay)
             except Exception as e:
                 emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
