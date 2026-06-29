@@ -225,17 +225,24 @@ def _plausible(csv_title, track):
     return not words or any(w in sp_name for w in words)
 
 
-MAX_RETRY_WAIT = 60   # never sleep longer than this on a 429
+AUTO_RETRY_MAX = 120   # sleep-and-retry only if Retry-After ≤ this; otherwise stop
 
-def _handle_429(e):
-    """Return seconds to sleep given a SpotifyException with http_status 429."""
-    retry_after = 10
+def _parse_retry_after(e):
+    """Return the Retry-After seconds from a 429 SpotifyException header."""
     try:
         if hasattr(e, 'headers') and e.headers:
-            retry_after = int(e.headers.get('Retry-After', 10))
+            return int(e.headers.get('Retry-After', 10))
     except Exception:
         pass
-    return min(retry_after + 2, MAX_RETRY_WAIT)
+    return 10
+
+def _fmt_wait(seconds):
+    """Format a wait duration as '5s', '3m 20s', or '23h 28m'."""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
 
 
 def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None, emit_fn=None):
@@ -274,21 +281,20 @@ def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None, em
                 return items[0] if items else None
             except spotipy.SpotifyException as e:
                 if e.http_status == 429:
-                    raw_after = 10
-                    try:
-                        if hasattr(e, 'headers') and e.headers:
-                            raw_after = int(e.headers.get('Retry-After', 10))
-                    except Exception:
-                        pass
-                    wait = min(raw_after + 2, MAX_RETRY_WAIT)
+                    raw_after = _parse_retry_after(e)
+                    if raw_after > AUTO_RETRY_MAX or attempt == 2:
+                        if emit_fn:
+                            emit_fn("status", {
+                                "msg": f"Rate limited — Spotify requests {_fmt_wait(raw_after)} wait. Cache saved — re-run in {_fmt_wait(raw_after)} to resume.",
+                                "type": "error",
+                            })
+                        raise  # propagate so song isn't cached and transfer stops
                     if emit_fn:
                         emit_fn("status", {
-                            "msg": f"Rate limited — Spotify requests {raw_after}s wait, retrying in {wait}s (attempt {attempt + 1}/3)",
+                            "msg": f"Rate limited — waiting {_fmt_wait(raw_after + 2)} (Spotify requested {_fmt_wait(raw_after)}, attempt {attempt + 1}/3)",
                             "type": "error",
                         })
-                    time.sleep(wait)
-                    if attempt == 2:
-                        raise  # all 3 attempts rate-limited — propagate so song isn't cached
+                    time.sleep(raw_after + 2)
                     continue
                 raise
         return None
@@ -442,7 +448,10 @@ def remove_playlist_duplicates(sp, playlist_id, delay=0.5, call_counter=None):
                     break
                 except spotipy.SpotifyException as e:
                     if e.http_status == 429:
-                        time.sleep(_handle_429(e))
+                        raw_after = _parse_retry_after(e)
+                        if raw_after > AUTO_RETRY_MAX or attempt == 2:
+                            raise
+                        time.sleep(raw_after + 2)
                         continue
                     raise
             removed += 1
@@ -592,9 +601,12 @@ def run_transfer(cfg, songs):
                     break
                 except spotipy.SpotifyException as e:
                     if e.http_status == 429:
-                        wait = _handle_429(e)
-                        emit("status", {"msg": f"Rate limited — waiting {wait}s before retrying add...", "type": "info"})
-                        time.sleep(wait)
+                        raw_after = _parse_retry_after(e)
+                        if raw_after > AUTO_RETRY_MAX:
+                            emit("status", {"msg": f"Rate limited — Spotify requests {_fmt_wait(raw_after)} wait. Re-run in {_fmt_wait(raw_after)} to resume.", "type": "error"})
+                            raise
+                        emit("status", {"msg": f"Rate limited — waiting {_fmt_wait(raw_after + 2)} before retrying add...", "type": "info"})
+                        time.sleep(raw_after + 2)
                         continue
                     for item in to_add:
                         emit("song", {"i": item['i'], "total": total, "csv_idx": item['csv_idx'],
