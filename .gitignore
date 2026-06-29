@@ -1,6 +1,9 @@
 # Spotify auth token cache — never commit (contains access tokens)
 .cache
 
+# Local song match cache — user-specific, not for version control
+song_cache.json
+
 # config.json IS tracked in this repo with blank credentials.
 # Fill in client_id and client_secret via the web UI or directly in the file.
 # Do NOT commit a config.json that contains real credentials.

@@ -18,6 +18,7 @@ import time
 import traceback
 import unicodedata
 import webbrowser
+from datetime import datetime, timezone
 
 from flask import (
     Flask, Response, jsonify, redirect, render_template,
@@ -48,10 +49,11 @@ if DEBUG:
             except Exception:
                 pass
 
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE   = os.path.join(BASE_DIR, "config.json")
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "library")
-CACHE_FILE    = os.path.join(BASE_DIR, ".cache")
+BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE     = os.path.join(BASE_DIR, "config.json")
+UPLOAD_FOLDER   = os.path.join(BASE_DIR, "library")
+CACHE_FILE      = os.path.join(BASE_DIR, ".cache")
+SONG_CACHE_FILE = os.path.join(BASE_DIR, "song_cache.json")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ── Global transfer state ─────────────────────────────────────────────────────
@@ -63,7 +65,8 @@ shutdown_event   = threading.Event()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-FUZZY_THRESHOLD = 0.85   # minimum similarity to pre-screen without an API call
+FUZZY_THRESHOLD      = 0.85   # minimum similarity to pre-screen without an API call
+NOT_FOUND_RETRY_DAYS = 30    # retry "not found" songs after this many days
 
 DEFAULTS = {
     "client_id":     "",
@@ -153,6 +156,28 @@ def _fuzzy_prescreen(norm_title, norm_artist, existing_by_name):
         if score > best_score:
             best_score, best_val = score, val
     return best_val, best_score
+
+
+def _cache_key(norm_title, norm_artist):
+    return f"{norm_title}|{norm_artist}"
+
+
+def load_song_cache():
+    if not os.path.exists(SONG_CACHE_FILE):
+        return {}
+    try:
+        with open(SONG_CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("songs", {})
+    except Exception:
+        return {}
+
+
+def save_song_cache(songs):
+    try:
+        with open(SONG_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "songs": songs}, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[WARN] Could not save song cache: {e}", flush=True)
 
 
 def fix_mojibake(s):
@@ -463,6 +488,12 @@ def run_transfer(cfg, songs):
         # new entries (top of CSV) then append to the playlist end on re-runs
         songs = list(reversed(songs))
 
+        # Load song match cache
+        song_cache = load_song_cache()
+        cache_hits = 0
+        if song_cache:
+            emit("status", {"msg": f"Song cache loaded — {len(song_cache)} entries", "type": "info"})
+
         # Fetch existing tracks only if syncing to an existing playlist (skip for new ones)
         if is_new_playlist:
             existing_ids, existing_by_name = set(), {}
@@ -523,17 +554,24 @@ def run_transfer(cfg, songs):
                 added += 1
             to_add.clear()
 
+        now_iso = lambda: datetime.now(timezone.utc).isoformat()
+
         for i, (title, artist) in enumerate(songs, 1):
             if shutdown_event.is_set():
                 break
             csv_idx = total - i
             try:
                 nt, na = _norm(title), _norm(artist)
+                ck     = _cache_key(nt, na)
 
                 # ── Exact pre-screen (no API call) ──────────────────────────
                 pre = existing_by_name.get((nt, na))
                 if pre:
                     m_tid, m_name, m_art = pre
+                    if ck not in song_cache:
+                        song_cache[ck] = {"track_id": m_tid, "spotify_title": m_name,
+                                          "spotify_artist": m_art, "stage": 0,
+                                          "searched_at": now_iso(), "status": "found"}
                     if skip_dupes and m_tid in session_ids:
                         csv_dupes += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
@@ -549,6 +587,10 @@ def run_transfer(cfg, songs):
                     fval, fscore = _fuzzy_prescreen(nt, na, existing_by_name)
                     if fval:
                         m_tid, m_name, m_art = fval
+                        if ck not in song_cache:
+                            song_cache[ck] = {"track_id": m_tid, "spotify_title": m_name,
+                                              "spotify_artist": m_art, "stage": 0,
+                                              "searched_at": now_iso(), "status": "found"}
                         if skip_dupes and m_tid in session_ids:
                             csv_dupes += 1
                             emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
@@ -561,6 +603,43 @@ def run_transfer(cfg, songs):
                                           "msg": f"Already in playlist (fuzzy {fscore:.0%})"})
                         continue
 
+                # ── Song match cache (no API call) ──────────────────────────
+                cached = song_cache.get(ck)
+                if cached:
+                    if cached["status"] == "found":
+                        cache_hits += 1
+                        tid     = cached["track_id"]
+                        tname   = cached["spotify_title"]
+                        tartist = cached["spotify_artist"]
+                        if tid in existing_ids:
+                            skipped += 1
+                            emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
+                                          "title": tname, "artist": tartist, "msg": "Already in playlist (cached)"})
+                        elif skip_dupes and tid in session_ids:
+                            csv_dupes += 1
+                            emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
+                                          "title": tname, "artist": tartist, "msg": "Duplicate in CSV (cached)"})
+                        else:
+                            session_ids.add(tid)
+                            existing_ids.add(tid)
+                            to_add.append({
+                                'uri': f"spotify:track:{tid}", 'i': i, 'csv_idx': csv_idx,
+                                'tname': tname, 'tartist': tartist, 'stage': cached["stage"],
+                            })
+                            if len(to_add) >= ADD_BATCH:
+                                flush_adds()
+                        continue
+                    elif cached["status"] == "not_found":
+                        searched_at = datetime.fromisoformat(cached["searched_at"])
+                        days_ago    = (datetime.now(timezone.utc) - searched_at).days
+                        if days_ago < NOT_FOUND_RETRY_DAYS:
+                            not_found.append(f"{title} — {artist}")
+                            emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "notfound",
+                                          "title": title, "artist": artist,
+                                          "msg": f"Not found on Spotify (retry in {NOT_FOUND_RETRY_DAYS - days_ago}d)"})
+                            continue
+                        emit("status", {"msg": f"Retrying: '{title}' — not found {days_ago}d ago", "type": "info"})
+
                 # ── Spotify API search ──────────────────────────────────────
                 emit("status", {"msg": f"Searching: {title} — {artist}", "type": "info"})
                 track, stage = search_track(sp, title, artist, delay, api_calls)
@@ -568,6 +647,9 @@ def run_transfer(cfg, songs):
                     tid     = track["id"]
                     tname   = track["name"]
                     tartist = track["artists"][0]["name"]
+                    song_cache[ck] = {"track_id": tid, "spotify_title": tname,
+                                      "spotify_artist": tartist, "stage": stage,
+                                      "searched_at": now_iso(), "status": "found"}
                     if tid in existing_ids:
                         skipped += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
@@ -586,6 +668,10 @@ def run_transfer(cfg, songs):
                         if len(to_add) >= ADD_BATCH:
                             flush_adds()
                 else:
+                    if stage != 'multi':
+                        song_cache[ck] = {"track_id": None, "spotify_title": None,
+                                          "spotify_artist": None, "stage": None,
+                                          "searched_at": now_iso(), "status": "not_found"}
                     reason = ("Multi-track / medley — skipped" if stage == 'multi'
                               else "Not found on Spotify")
                     not_found.append(f"{title} — {artist}")
@@ -598,6 +684,7 @@ def run_transfer(cfg, songs):
                 time.sleep(delay)
 
         flush_adds()
+        save_song_cache(song_cache)
 
         # Remove duplicates pass
         dupes_removed = 0
@@ -614,6 +701,7 @@ def run_transfer(cfg, songs):
             "csv_dupes": csv_dupes, "dupes_removed": dupes_removed,
             "not_found": not_found, "playlist_url": playlist_url,
             "api_calls": api_calls[0], "elapsed_s": round(time.time() - start_time, 1),
+            "cache_hits": cache_hits,
         })
 
     except Exception as e:
