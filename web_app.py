@@ -6,6 +6,7 @@ Press Ctrl+C to stop.
 """
 
 import csv
+import difflib
 import io
 import json
 import os
@@ -61,6 +62,8 @@ shutdown_event   = threading.Event()
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
+FUZZY_THRESHOLD = 0.85   # minimum similarity to pre-screen without an API call
 
 DEFAULTS = {
     "client_id":     "",
@@ -132,6 +135,26 @@ _VERSION_RE = re.compile(
 _ARTIST_SPLIT_RE = re.compile(r'\s+&\s+|\s+vs\.?\s+|\s+x\s+|,\s+', re.IGNORECASE)
 
 
+def _fuzzy_prescreen(norm_title, norm_artist, existing_by_name):
+    """
+    Scan existing_by_name for a near-match above FUZZY_THRESHOLD on both title and artist.
+    Returns (track_tuple, score) or (None, 0). Used when exact _norm lookup misses due to
+    accent differences, minor punctuation variation, etc.
+    """
+    best_score, best_val = 0.0, None
+    for (et, ea), val in existing_by_name.items():
+        t_score = difflib.SequenceMatcher(None, norm_title, et).ratio()
+        if t_score < FUZZY_THRESHOLD:
+            continue
+        a_score = difflib.SequenceMatcher(None, norm_artist, ea).ratio()
+        if a_score < FUZZY_THRESHOLD:
+            continue
+        score = (t_score + a_score) / 2
+        if score > best_score:
+            best_score, best_val = score, val
+    return best_val, best_score
+
+
 def fix_mojibake(s):
     """Recover UTF-8 text that was incorrectly decoded as Latin-1 (common in Shazam exports)."""
     try:
@@ -186,7 +209,7 @@ def _handle_429(e):
     return retry_after + 2
 
 
-def search_track(sp, title, artist, inter_stage_delay=0.0):
+def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None):
     """
     Progressive 5-stage Spotify search pipeline.
     Returns (track_dict, stage_int) on success, or (None, 'multi'|None) on failure.
@@ -198,6 +221,7 @@ def search_track(sp, title, artist, inter_stage_delay=0.0):
     Stage 5 — full unicode normalization + accent removal
 
     inter_stage_delay: seconds to sleep before each retry call (not before the first).
+    call_counter: optional [int] list; incremented once per API call made.
     """
     if re.search(r' / ', title):
         return None, 'multi'
@@ -211,6 +235,8 @@ def search_track(sp, title, artist, inter_stage_delay=0.0):
         if not first_call and inter_stage_delay:
             time.sleep(inter_stage_delay)
         first_call = False
+        if call_counter is not None:
+            call_counter[0] += 1
         for attempt in range(3):
             try:
                 r = sp.search(q=q, type='track', limit=1)
@@ -260,12 +286,14 @@ def search_track(sp, title, artist, inter_stage_delay=0.0):
     return None, None
 
 
-def get_all_playlist_track_ids(sp, playlist_id):
+def get_all_playlist_track_ids(sp, playlist_id, call_counter=None):
     # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     ids     = set()
     by_name = {}   # {(norm_title, norm_artist): (track_id, spotify_name, spotify_artist)}
     offset  = 0
     while True:
+        if call_counter is not None:
+            call_counter[0] += 1
         results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
         for item in results.get("items", []):
             track = item.get("track") or item.get("item") if item else None
@@ -282,10 +310,12 @@ def get_all_playlist_track_ids(sp, playlist_id):
     return ids, by_name
 
 
-def find_existing_playlist(sp, user_id, name):
+def find_existing_playlist(sp, user_id, name, call_counter=None):
     # Direct call to /v1/me/playlists — works on all spotipy versions
     offset = 0
     while True:
+        if call_counter is not None:
+            call_counter[0] += 1
         results = sp._get("me/playlists", limit=50, offset=offset)
         for pl in results["items"]:
             if pl["owner"]["id"] == user_id and pl["name"] == name:
@@ -297,11 +327,13 @@ def find_existing_playlist(sp, user_id, name):
     return None
 
 
-def remove_playlist_duplicates(sp, playlist_id, delay=0.5):
+def remove_playlist_duplicates(sp, playlist_id, delay=0.5, call_counter=None):
     # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     items = []
     offset = 0
     while True:
+        if call_counter is not None:
+            call_counter[0] += 1
         results = sp._get(f"playlists/{playlist_id}/items", limit=100, offset=offset)
         for item in results.get("items", []):
             track = item.get("track") or item.get("item") if item else None
@@ -324,6 +356,8 @@ def remove_playlist_duplicates(sp, playlist_id, delay=0.5):
     removed = 0
     for uri, positions in uri_positions.items():
         for pos in sorted(positions, reverse=True):
+            if call_counter is not None:
+                call_counter[0] += 1
             for attempt in range(3):
                 try:
                     sp._delete(
@@ -373,9 +407,12 @@ def run_transfer(cfg, songs):
         transfer_queue.put({"event": event, "data": data})
 
     playlist_url = ""
+    api_calls    = [0]   # mutable so nested functions can increment
+    start_time   = time.time()
     try:
         emit("status", {"msg": "Connecting to Spotify...", "type": "info"})
         sp   = make_sp(cfg)
+        api_calls[0] += 1
         user = sp.current_user()
         emit("status", {"msg": f"Logged in as {user['display_name']}", "type": "success"})
 
@@ -392,6 +429,7 @@ def run_transfer(cfg, songs):
         if playlist_id_cfg:
             playlist_id = playlist_id_cfg
             try:
+                api_calls[0] += 1
                 pl_info      = sp._get(f"playlists/{playlist_id}")
                 playlist_url  = pl_info["external_urls"]["spotify"]
                 playlist_name = pl_info["name"]
@@ -399,13 +437,14 @@ def run_transfer(cfg, songs):
                 playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
             emit("status", {"msg": f"Using existing playlist '{playlist_name}'", "type": "info"})
         else:
-            existing = find_existing_playlist(sp, user["id"], playlist_name)
+            existing = find_existing_playlist(sp, user["id"], playlist_name, api_calls)
             if existing:
                 playlist_id  = existing["id"]
                 playlist_url = existing["external_urls"]["spotify"]
                 emit("status", {"msg": f"Found '{playlist_name}' — syncing new songs only", "type": "info"})
             else:
                 # Use direct API call to /v1/me/playlists — works on all spotipy versions
+                api_calls[0] += 1
                 playlist = sp._post(
                     "me/playlists",
                     payload={
@@ -430,7 +469,7 @@ def run_transfer(cfg, songs):
             emit("status", {"msg": "New playlist — skipping duplicate check", "type": "info"})
         else:
             emit("status", {"msg": "Fetching existing playlist tracks...", "type": "info"})
-            existing_ids, existing_by_name = get_all_playlist_track_ids(sp, playlist_id)
+            existing_ids, existing_by_name = get_all_playlist_track_ids(sp, playlist_id, api_calls)
             emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
             if existing_by_name:
                 prescreened = sum(1 for t, a in songs if (_norm(t), _norm(a)) in existing_by_name)
@@ -452,6 +491,7 @@ def run_transfer(cfg, songs):
             if not to_add:
                 return
             uris = [item['uri'] for item in to_add]
+            api_calls[0] += 1
             for attempt in range(3):
                 try:
                     sp._post(f"playlists/{playlist_id}/items", payload={"uris": uris})
@@ -488,7 +528,10 @@ def run_transfer(cfg, songs):
                 break
             csv_idx = total - i
             try:
-                pre = existing_by_name.get((_norm(title), _norm(artist)))
+                nt, na = _norm(title), _norm(artist)
+
+                # ── Exact pre-screen (no API call) ──────────────────────────
+                pre = existing_by_name.get((nt, na))
                 if pre:
                     m_tid, m_name, m_art = pre
                     if skip_dupes and m_tid in session_ids:
@@ -498,10 +541,29 @@ def run_transfer(cfg, songs):
                     else:
                         skipped += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
-                                      "title": m_name, "artist": m_art, "msg": "Already in playlist"})
+                                      "title": m_name, "artist": m_art, "msg": "Already in playlist (pre-screened)"})
                     continue
 
-                track, stage = search_track(sp, title, artist, delay)
+                # ── Fuzzy pre-screen (no API call) ──────────────────────────
+                if existing_by_name:
+                    fval, fscore = _fuzzy_prescreen(nt, na, existing_by_name)
+                    if fval:
+                        m_tid, m_name, m_art = fval
+                        if skip_dupes and m_tid in session_ids:
+                            csv_dupes += 1
+                            emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
+                                          "title": m_name, "artist": m_art,
+                                          "msg": f"Duplicate in CSV (fuzzy {fscore:.0%})"})
+                        else:
+                            skipped += 1
+                            emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
+                                          "title": m_name, "artist": m_art,
+                                          "msg": f"Already in playlist (fuzzy {fscore:.0%})"})
+                        continue
+
+                # ── Spotify API search ──────────────────────────────────────
+                emit("status", {"msg": f"Searching: {title} — {artist}", "type": "info"})
+                track, stage = search_track(sp, title, artist, delay, api_calls)
                 if track:
                     tid     = track["id"]
                     tname   = track["name"]
@@ -509,7 +571,7 @@ def run_transfer(cfg, songs):
                     if tid in existing_ids:
                         skipped += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
-                                      "title": tname, "artist": tartist, "msg": "Already in playlist"})
+                                      "title": tname, "artist": tartist, "msg": "Already in playlist (API search)"})
                     elif skip_dupes and tid in session_ids:
                         csv_dupes += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
@@ -542,7 +604,7 @@ def run_transfer(cfg, songs):
         if remove_dupes and not shutdown_event.is_set():
             emit("status", {"msg": "Scanning for duplicates to remove...", "type": "info"})
             try:
-                dupes_removed = remove_playlist_duplicates(sp, playlist_id, delay)
+                dupes_removed = remove_playlist_duplicates(sp, playlist_id, delay, api_calls)
                 emit("status", {"msg": f"Removed {dupes_removed} duplicate(s)", "type": "success"})
             except Exception as e:
                 emit("status", {"msg": f"Duplicate removal error: {e}", "type": "error"})
@@ -551,6 +613,7 @@ def run_transfer(cfg, songs):
             "total": total, "added": added, "skipped": skipped,
             "csv_dupes": csv_dupes, "dupes_removed": dupes_removed,
             "not_found": not_found, "playlist_url": playlist_url,
+            "api_calls": api_calls[0], "elapsed_s": round(time.time() - start_time, 1),
         })
 
     except Exception as e:
@@ -750,6 +813,66 @@ def upload_csv():
         with open(save_path, "w", encoding="utf-8") as out:
             out.write(content)
         return jsonify({"ok": True, "count": len(songs)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/preflight", methods=["POST"])
+def preflight():
+    """Estimate Spotify API calls for a transfer without starting it."""
+    data      = request.get_json() or {}
+    songs_raw = data.get("songs", [])
+    songs     = [(s[0], s[1]) for s in songs_raw if len(s) >= 2]
+    if not songs:
+        return jsonify({"error": "No songs"}), 400
+
+    cfg = load_config()
+    for key in ("playlist_name", "playlist_id", "public_playlist", "dupes_mode", "delay_ms"):
+        if key in data:
+            cfg[key] = data[key]
+
+    try:
+        sp   = make_sp(cfg)
+        user = sp.current_user()
+
+        playlist_id_cfg = cfg.get("playlist_id") or None
+        playlist_name   = cfg.get("playlist_name", "Shazam2Spotify") or "Shazam2Spotify"
+        is_new_playlist = False
+        existing_total  = 0
+
+        if playlist_id_cfg:
+            try:
+                pl_info       = sp._get(f"playlists/{playlist_id_cfg}")
+                existing_total = (pl_info.get("items") or pl_info.get("tracks") or {}).get("total", 0)
+                playlist_name  = pl_info.get("name", playlist_name)
+            except Exception:
+                pass
+        else:
+            existing = find_existing_playlist(sp, user["id"], playlist_name)
+            if existing:
+                existing_total = (existing.get("items") or existing.get("tracks") or {}).get("total", 0)
+            else:
+                is_new_playlist = True
+
+        total       = len(songs)
+        fetch_calls = 0 if is_new_playlist else (existing_total + 99) // 100
+        search_max  = total * 5
+        add_max     = (total + 49) // 50
+
+        return jsonify({
+            "total_songs":     total,
+            "existing_tracks": existing_total,
+            "is_new_playlist": is_new_playlist,
+            "playlist_name":   playlist_name,
+            "estimates": {
+                "fetch_calls": fetch_calls,
+                "search_min":  0,
+                "search_max":  search_max,
+                "add_max":     add_max,
+                "total_min":   fetch_calls,
+                "total_max":   fetch_calls + search_max + add_max,
+            },
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

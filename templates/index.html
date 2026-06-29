@@ -181,7 +181,7 @@
     .log-success  { color: var(--green); }
 
     .stats-row {
-      display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+      display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px;
       margin-top: 16px;
     }
     @media (max-width: 560px) { .stats-row { grid-template-columns: repeat(3, 1fr); } }
@@ -240,6 +240,20 @@
       border-radius: 8px; padding: 10px 14px; margin-top: 8px;
       font-size: 0.82rem; color: #f08080;
     }
+
+    /* Confirmation modal */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100;
+    }
+    .modal-box { max-width: 500px; width: 90%; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+    .estimate-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-top: 8px; }
+    .estimate-table td { padding: 5px 0; vertical-align: top; }
+    .estimate-table td:last-child { text-align: right; font-weight: 600; white-space: nowrap; padding-left: 12px; }
+    .estimate-table .total-row td { border-top: 1px solid var(--surface3); padding-top: 10px; font-weight: 700; font-size: 0.92rem; }
+    .estimate-note { font-size: 0.75rem; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -454,6 +468,10 @@
         <div class="stat-num" id="stat-skipped">0</div>
         <div class="stat-label">Already in Playlist</div>
       </div>
+      <div class="stat-box stat-notfound">
+        <div class="stat-num" id="stat-notfound">0</div>
+        <div class="stat-label">Not Found</div>
+      </div>
       <div class="stat-box stat-dup">
         <div class="stat-num" id="stat-dup">0</div>
         <div class="stat-label">CSV Dupes</div>
@@ -463,8 +481,10 @@
         <div class="stat-label">Dupes Removed</div>
       </div>
     </div>
-    <div id="stat-notfound-wrap" class="hidden" style="margin-top:10px; font-size:0.82rem; color:var(--text-muted)">
-      <span id="stat-notfound-count"></span> songs not found on Spotify
+
+    <div id="transfer-meta" class="hidden" style="margin-top:10px; font-size:0.8rem; color:var(--text-muted)">
+      <span id="meta-api-calls" style="color:var(--text); font-weight:600"></span> API calls in
+      <span id="meta-elapsed" style="color:var(--text); font-weight:600"></span>s
     </div>
 
     <div id="done-actions" class="hidden" style="margin-top:16px">
@@ -486,11 +506,30 @@
 
 </div><!-- end layout -->
 
+<!-- ── Confirmation Modal ── -->
+<div id="confirm-modal" class="modal-overlay hidden">
+  <div class="modal-box card">
+    <div class="card-title">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      Confirm Transfer
+    </div>
+    <div id="confirm-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="cancelTransfer()">Cancel</button>
+      <button class="btn btn-green" onclick="confirmTransfer()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        Start Transfer
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
   let loadedSongs     = [];
   let rawCsvRows      = null;   // { headers: [...], rows: [[...], ...] }
   let transferResults = [];     // indexed by song position (0-based): {status, spotifyTitle, spotifyArtist, msg}
   let eventSource     = null;
+  let pendingPayload  = null;   // stored between preflight confirmation and actual start
 
   document.addEventListener('DOMContentLoaded', () => {
     setupDragDrop();
@@ -699,9 +738,80 @@
       delay_ms:        parseInt(document.getElementById('delay_ms').value) || 500,
     };
 
+    const btn     = document.getElementById('start-btn');
+    const origHtml = btn.innerHTML;
+    btn.disabled  = true;
+    btn.textContent = 'Estimating…';
+
+    try {
+      const res  = await fetch('/preflight', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.error) { alert('Could not estimate API calls: ' + data.error); return; }
+      pendingPayload = payload;
+      showConfirmModal(data);
+    } catch(e) {
+      alert('Preflight request failed: ' + e);
+    } finally {
+      btn.innerHTML = origHtml;
+      btn.disabled  = false;
+    }
+  }
+
+  function showConfirmModal(info) {
+    const e     = info.estimates;
+    const isNew = info.is_new_playlist;
+    const name  = info.playlist_name;
+
+    document.getElementById('confirm-body').innerHTML = `
+      <table class="estimate-table" style="margin-bottom:16px">
+        <tr>
+          <td>Songs in CSV</td>
+          <td>${info.total_songs}</td>
+        </tr>
+        <tr>
+          <td>Tracks already in <em>${name}</em></td>
+          <td>${isNew ? '— (new playlist)' : info.existing_tracks}</td>
+        </tr>
+      </table>
+      <div style="font-size:0.78rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px">Estimated Spotify API Calls</div>
+      <table class="estimate-table">
+        <tr>
+          <td>Playlist fetch <span class="estimate-note">(pre-screening, 100 tracks/page)</span></td>
+          <td>${isNew ? 0 : e.fetch_calls}</td>
+        </tr>
+        <tr>
+          <td>Song search <span class="estimate-note">(1–5 per song; 0 if pre-screened)</span></td>
+          <td>0 – ${e.search_max}</td>
+        </tr>
+        <tr>
+          <td>Track adds <span class="estimate-note">(batched, 50 songs/call)</span></td>
+          <td>0 – ${e.add_max}</td>
+        </tr>
+        <tr class="total-row">
+          <td>Total range</td>
+          <td>${e.total_min} – ${e.total_max}</td>
+        </tr>
+      </table>
+      <p style="margin-top:10px;font-size:0.75rem;color:var(--text-muted)">
+        Songs that exactly match by name in the playlist skip search calls entirely (pre-screening).
+        Search calls drop to 0 for all matched songs; unmatched songs fall through up to 5 stages.
+      </p>
+    `;
+    document.getElementById('confirm-modal').classList.remove('hidden');
+  }
+
+  async function confirmTransfer() {
+    document.getElementById('confirm-modal').classList.add('hidden');
+    if (!pendingPayload) return;
+    const payload = pendingPayload;
+    pendingPayload = null;
+
     const res  = await fetch('/start_transfer', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
@@ -721,6 +831,11 @@
       addLog('Connection error', 'error');
       eventSource.close();
     };
+  }
+
+  function cancelTransfer() {
+    document.getElementById('confirm-modal').classList.add('hidden');
+    pendingPayload = null;
   }
 
   function handleStreamEvent(e) {
@@ -756,15 +871,15 @@
       document.getElementById('progress-bar').style.width = '100%';
       document.getElementById('progress-label').textContent = 'Transfer complete!';
       document.getElementById('stats-row').classList.remove('hidden');
-      document.getElementById('stat-total').textContent   = d.total;
-      document.getElementById('stat-added').textContent   = d.added;
-      document.getElementById('stat-skipped').textContent = d.skipped;
-      document.getElementById('stat-dup').textContent     = d.csv_dupes;
-      document.getElementById('stat-removed').textContent = d.dupes_removed;
-      if (d.not_found.length) {
-        document.getElementById('stat-notfound-wrap').classList.remove('hidden');
-        document.getElementById('stat-notfound-count').textContent = d.not_found.length;
-      }
+      document.getElementById('stat-total').textContent    = d.total;
+      document.getElementById('stat-added').textContent    = d.added;
+      document.getElementById('stat-skipped').textContent  = d.skipped;
+      document.getElementById('stat-notfound').textContent = d.not_found.length;
+      document.getElementById('stat-dup').textContent      = d.csv_dupes;
+      document.getElementById('stat-removed').textContent  = d.dupes_removed;
+      document.getElementById('meta-api-calls').textContent = d.api_calls;
+      document.getElementById('meta-elapsed').textContent   = d.elapsed_s;
+      document.getElementById('transfer-meta').classList.remove('hidden');
       document.getElementById('done-actions').classList.remove('hidden');
       let summary = `Done! ${d.added} added`;
       if (d.skipped)       summary += `, ${d.skipped} already in playlist`;
