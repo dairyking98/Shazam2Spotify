@@ -408,7 +408,7 @@ def find_existing_playlist(sp, user_id, name, call_counter=None):
     return None
 
 
-def remove_playlist_duplicates(sp, playlist_id, delay=0.5, call_counter=None):
+def remove_playlist_duplicates(sp, playlist_id, delay=0.5, call_counter=None, emit_fn=None):
     # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     items = []
     offset = 0
@@ -450,7 +450,11 @@ def remove_playlist_duplicates(sp, playlist_id, delay=0.5, call_counter=None):
                     if e.http_status == 429:
                         raw_after = _parse_retry_after(e)
                         if raw_after > AUTO_RETRY_MAX or attempt == 2:
+                            if emit_fn:
+                                emit_fn("status", {"msg": f"Rate limited — Spotify requests {_fmt_wait(raw_after)} wait. Re-run in {_fmt_wait(raw_after)} to resume.", "type": "error"})
                             raise
+                        if emit_fn:
+                            emit_fn("status", {"msg": f"Rate limited — waiting {_fmt_wait(raw_after + 2)} before retrying remove...", "type": "info"})
                         time.sleep(raw_after + 2)
                         continue
                     raise
@@ -605,7 +609,7 @@ def run_transfer(cfg, songs):
                 except spotipy.SpotifyException as e:
                     if e.http_status == 429:
                         raw_after = _parse_retry_after(e)
-                        if raw_after > AUTO_RETRY_MAX:
+                        if raw_after > AUTO_RETRY_MAX or attempt == 2:
                             emit("status", {"msg": f"Rate limited — Spotify requests {_fmt_wait(raw_after)} wait. Re-run in {_fmt_wait(raw_after)} to resume.", "type": "error"})
                             raise
                         emit("status", {"msg": f"Rate limited — waiting {_fmt_wait(raw_after + 2)} before retrying add...", "type": "info"})
@@ -776,12 +780,13 @@ def run_transfer(cfg, songs):
                 time.sleep(delay)
             except spotipy.SpotifyException as e:
                 if e.http_status == 429:
+                    raw_after = _parse_retry_after(e)
                     save_song_cache(song_cache)
                     emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "error",
                                   "title": title, "artist": artist,
-                                  "msg": "Rate limited — not cached, will retry on re-run"})
+                                  "msg": f"Rate limited ({_fmt_wait(raw_after)}) — not cached, will retry on re-run"})
                     emit("status", {
-                        "msg": "Spotify rate limit reached. Cache saved — re-run transfer to resume (cached songs will be skipped instantly).",
+                        "msg": f"Rate limited — Spotify requests {_fmt_wait(raw_after)} wait. Cache saved — re-run in {_fmt_wait(raw_after)} to resume.",
                         "type": "error",
                     })
                 else:
@@ -804,7 +809,7 @@ def run_transfer(cfg, songs):
         if remove_dupes and not shutdown_event.is_set():
             emit("status", {"msg": "Scanning for duplicates to remove...", "type": "info"})
             try:
-                dupes_removed = remove_playlist_duplicates(sp, playlist_id, delay, api_calls)
+                dupes_removed = remove_playlist_duplicates(sp, playlist_id, delay, api_calls, emit)
                 emit("status", {"msg": f"Removed {dupes_removed} duplicate(s)", "type": "success"})
             except Exception as e:
                 emit("status", {"msg": f"Duplicate removal error: {e}", "type": "error"})
