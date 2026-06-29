@@ -330,6 +330,30 @@ def search_track(sp, title, artist, inter_stage_delay=0.0, call_counter=None, em
     return None, None
 
 
+def _playlist_track_keys(tname, all_artists):
+    """
+    Return all (norm_title, norm_artist) key variants for a playlist track so that
+    Shazam CSV entries with different feat/version suffixes or compound artists
+    still match without an API call.
+
+    Covers: full title × all artists, stripped title × all artists.
+    Stripped = feat. removed then version/remix/edit/remaster removed.
+    """
+    clean, _ = _extract_featured(tname)
+    stripped  = _strip_version(clean)
+
+    titles  = [tname]
+    if stripped and stripped.lower() != tname.lower():
+        titles.append(stripped)
+
+    keys = []
+    for t in titles:
+        nt = _norm(t)
+        for art in all_artists:
+            keys.append((nt, _norm(art)))
+    return keys
+
+
 def get_all_playlist_track_ids(sp, playlist_id, call_counter=None):
     # Use /items endpoint (replaces deprecated /tracks — Spotify Feb 2026 API change)
     ids     = set()
@@ -342,11 +366,18 @@ def get_all_playlist_track_ids(sp, playlist_id, call_counter=None):
         for item in results.get("items", []):
             track = item.get("track") or item.get("item") if item else None
             if track and track.get("id"):
-                tid    = track["id"]
-                tname  = track.get("name", "")
-                tart   = track["artists"][0]["name"] if track.get("artists") else ""
+                tid        = track["id"]
+                tname      = track.get("name", "")
+                all_arts   = [a["name"] for a in track.get("artists", []) if a.get("name")] or [""]
+                primary    = all_arts[0]
                 ids.add(tid)
-                by_name[(_norm(tname), _norm(tart))] = (tid, tname, tart)
+                val = (tid, tname, primary)
+                # Index under full and stripped title × all artists so Shazam CSVs
+                # with missing feat./version suffixes still get an O(1) match.
+                for key in _playlist_track_keys(tname, all_arts):
+                    by_name.setdefault(key, val)
+                # Always ensure the exact key wins (don't let stripped overwrite it)
+                by_name[(_norm(tname), _norm(primary))] = val
         if results.get("next"):
             offset += 100
         else:
@@ -522,7 +553,20 @@ def run_transfer(cfg, songs):
             existing_ids, existing_by_name = get_all_playlist_track_ids(sp, playlist_id, api_calls)
             emit("status", {"msg": f"{len(existing_ids)} tracks already in playlist", "type": "info"})
             if existing_by_name:
-                prescreened = sum(1 for t, a in songs if (_norm(t), _norm(a)) in existing_by_name)
+                def _would_prescreen(t, a):
+                    nt, na = _norm(t), _norm(a)
+                    if (nt, na) in existing_by_name:
+                        return True
+                    clean, _ = _extract_featured(t)
+                    nts = _norm(_strip_version(clean))
+                    if nts != nt and (nts, na) in existing_by_name:
+                        return True
+                    for sp_art in _split_artists(a):
+                        na_s = _norm(sp_art)
+                        if na_s != na and ((nt, na_s) in existing_by_name or (nts != nt and (nts, na_s) in existing_by_name)):
+                            return True
+                    return False
+                prescreened = sum(1 for t, a in songs if _would_prescreen(t, a))
                 if prescreened:
                     emit("status", {"msg": f"{prescreened}/{len(songs)} songs matched in playlist by name — skipping Spotify search for those", "type": "info"})
 
@@ -584,14 +628,31 @@ def run_transfer(cfg, songs):
                 nt, na = _norm(title), _norm(artist)
                 ck     = _cache_key(nt, na)
 
-                # ── Exact pre-screen (no API call) ──────────────────────────
+                # ── Exact / variant pre-screen (no API call) ─────────────────
+                # Try: (full title, artist), (stripped title, artist),
+                #      and each split sub-artist for compound CSV entries.
+                clean_csv, _ = _extract_featured(title)
+                nts = _norm(_strip_version(clean_csv))  # stripped CSV title
+
                 pre = existing_by_name.get((nt, na))
+                if not pre and nts != nt:
+                    pre = existing_by_name.get((nts, na))
+                if not pre:
+                    for split_art in _split_artists(artist):
+                        na_s = _norm(split_art)
+                        if na_s == na:
+                            continue
+                        pre = existing_by_name.get((nt, na_s)) or (existing_by_name.get((nts, na_s)) if nts != nt else None)
+                        if pre:
+                            break
                 if pre:
                     m_tid, m_name, m_art = pre
                     if ck not in song_cache:
                         song_cache[ck] = {"track_id": m_tid, "spotify_title": m_name,
                                           "spotify_artist": m_art, "stage": 0,
                                           "searched_at": now_iso(), "status": "found"}
+                    exact = (m_name.lower() == title.lower() and m_art.lower() == artist.lower())
+                    pre_label = "Already in playlist (pre-screened)" if exact else f"Already in playlist (matched: {m_name} — {m_art})"
                     if skip_dupes and m_tid in session_ids:
                         csv_dupes += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "duplicate",
@@ -599,7 +660,7 @@ def run_transfer(cfg, songs):
                     else:
                         skipped += 1
                         emit("song", {"i": i, "total": total, "csv_idx": csv_idx, "status": "skipped",
-                                      "title": m_name, "artist": m_art, "msg": "Already in playlist (pre-screened)"})
+                                      "title": m_name, "artist": m_art, "msg": pre_label})
                     continue
 
                 # ── Fuzzy pre-screen (no API call) ──────────────────────────
