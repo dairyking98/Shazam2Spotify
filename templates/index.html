@@ -428,6 +428,23 @@
       </div>
     </div>
 
+    <!-- Song cache -->
+    <div class="options-section">
+      <div class="options-section-title">Song Cache</div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Transfer cache to another PC</div>
+          <div class="toggle-desc">The song match cache lives only on this machine. Download it to bring your matched songs to a new install, or upload one to merge it in.</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="downloadCache()">Download Cache</button>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('cache_upload_input').click()">Upload Cache</button>
+          <input type="file" id="cache_upload_input" accept="application/json,.json" class="hidden" onchange="uploadCache(this.files[0])" />
+        </div>
+      </div>
+    </div>
+
     <div style="margin-top:20px">
       <button class="btn btn-green" id="start-btn" onclick="startTransfer()" disabled>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -1003,6 +1020,27 @@
     const a    = document.createElement('a');
     a.href = url; a.download = 'shazam2spotify_report.csv'; a.click();
     URL.revokeObjectURL(url);
+  }
+
+  // ── Song cache transfer ────────────────────────────────────────────────────
+  function downloadCache() {
+    window.location = '/download_cache';
+  }
+
+  async function uploadCache(file) {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('cache_file', file);
+    try {
+      const res  = await fetch('/upload_cache', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.error) { alert('Cache import failed: ' + data.error); return; }
+      alert(`Imported ${data.imported} cached songs (${data.total} total in cache now).`);
+    } catch (e) {
+      alert('Cache import failed: ' + e);
+    } finally {
+      document.getElementById('cache_upload_input').value = '';
+    }
   }
 
   // ── Playlist selector ──────────────────────────────────────────────────────

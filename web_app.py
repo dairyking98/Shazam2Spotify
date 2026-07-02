@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from flask import (
     Flask, Response, jsonify, redirect, render_template,
-    request, url_for
+    request, send_file, url_for
 )
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -1021,6 +1021,32 @@ def upload_csv():
         return jsonify({"ok": True, "count": len(songs)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/download_cache")
+def download_cache():
+    if not os.path.exists(SONG_CACHE_FILE):
+        return jsonify({"error": "No cache file yet — run a transfer first"}), 404
+    return send_file(SONG_CACHE_FILE, as_attachment=True,
+                      download_name="song_cache.json", mimetype="application/json")
+
+
+@app.route("/upload_cache", methods=["POST"])
+def upload_cache():
+    if "cache_file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    try:
+        payload = json.load(request.files["cache_file"])
+        songs   = payload.get("songs")
+        if not isinstance(songs, dict):
+            raise ValueError("missing 'songs' object")
+    except Exception as e:
+        return jsonify({"error": f"Invalid cache file: {e}"}), 400
+
+    merged = load_song_cache()
+    merged.update(songs)   # uploaded entries win on conflict
+    save_song_cache(merged)
+    return jsonify({"ok": True, "imported": len(songs), "total": len(merged)})
 
 
 @app.route("/preflight", methods=["POST"])

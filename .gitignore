@@ -1,6 +1,10 @@
 # Spotify auth token cache — never commit (contains access tokens)
 .cache
 
+# Song match cache — personal listening history, machine-local.
+# Use the Download/Upload Cache buttons in the UI to move it between PCs instead.
+song_cache.json
+
 # config.json IS tracked in this repo with blank credentials.
 # Fill in client_id and client_secret via the web UI or directly in the file.
 # Do NOT commit a config.json that contains real credentials.
